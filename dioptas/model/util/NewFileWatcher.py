@@ -86,7 +86,7 @@ class NewFileInDirectoryWatcher(QtCore.QObject):
         file_size = -1
         while file_size != os.stat(file_path).st_size:
             file_size = os.stat(file_path).st_size
-            time.sleep(0.01)
+            time.sleep(0.1)
 
         self.filepath_queue.put(os.path.abspath(file_path))
 
