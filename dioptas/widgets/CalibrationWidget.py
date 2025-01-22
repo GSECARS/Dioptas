@@ -571,7 +571,7 @@ class PeakSelectionGroupBox(QtWidgets.QGroupBox):
         self._layout.addWidget(LabelAlignRight('Search size:'), 4, 0)
         self.search_size_sb = SpinBoxAlignRight()
         self.search_size_sb.setValue(10)
-        self.search_size_sb.setMaximumWidth(50)
+        self.search_size_sb.setMaximumWidth(75)
         self._layout.addWidget(self.search_size_sb, 4, 1, 1, 2)
         self._layout.addItem(QtWidgets.QSpacerItem(0, 0, QtWidgets.QSizePolicy.Expanding,
                                                    QtWidgets.QSizePolicy.Minimum), 4, 2, 1, 2)
