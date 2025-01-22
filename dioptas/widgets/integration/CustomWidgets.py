@@ -223,7 +223,7 @@ class StepWidget(QtWidgets.QWidget):
         self._layout.addLayout(self._step_layout, 1, 0, 1, 2)
 
     def style_widgets(self):
-        self.step_txt.setMaximumWidth(53)
+        self.step_txt.setMaximumWidth(64)
         self.step_txt.setFixedHeight(25)
 
         small_btn_width = 40
