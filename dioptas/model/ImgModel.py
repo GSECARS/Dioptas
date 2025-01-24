@@ -831,7 +831,8 @@ class ImgModel(object):
                                 value = value[frame_index]
                             else:
                                 value = value[0] if len(value) == 1 else value
-                        result.append(f"{dataset_name}: {value}")
+                        if not dataset_name.startswith("NDArray"):
+                            result.append(f"{dataset_name}: {value}")
 
         with h5py.File(filename, "r") as h5_file:
             h5_file.visititems(find_attrs)
