@@ -793,12 +793,12 @@ class ImgModel(object):
 
     def _get_motors_info(self, image):
         """
-        reads the file info from tif_tags and returns positions of vertical, horizontal, focus and omega motors
+        reads the file info from tif_tags and returns positions of vertical, horizontal, and focus motors
         """
         result = {}
         tags = image.tag
 
-        useful_tags = ['Horizontal:', 'Vertical:', 'Focus:', 'Omega:']
+        useful_tags = ['Horizontal:', 'Vertical:', 'Focus:']
 
         try:
             tag_values = tags.itervalues()

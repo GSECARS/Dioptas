@@ -25,5 +25,4 @@
 epics_config = {
     'sample_position_x': '13IDD:m102',
     'sample_position_y': '13IDD:m101',
-    'sample_position_z': '13IDD:m100',
-    'sample_position_omega': '13IDD:Auto1:m1'}
+    'sample_position_z': '13IDD:m100'}
