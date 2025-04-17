@@ -1,3 +1,10 @@
+# 0.7.2 (in development)
+
+## Bugfixes
+
+- orientation from ponifiles is now correctly saved in a dioptas project file - thus, upon reloading it still works
+
+
 # 0.7.1 (stable 03.04.2025)
 
 ## Bugfixes
