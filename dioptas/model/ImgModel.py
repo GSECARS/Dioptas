@@ -264,6 +264,8 @@ class ImgModel(object):
                 "img_data": self.loader.get_image(frame_index),
                 "series_max": self.loader.series_max,
                 "series_get_image": self.loader.get_image,
+                "file_info": self._get_h5_file_info(filename, frame_index),
+                "motors_info": self._get_h5_motors_info(filename, frame_index)
             }
         except (IOError, fabio.fabioutils.NotGoodReader):
             return None
@@ -478,6 +480,7 @@ class ImgModel(object):
         Takes a position in  the series to load, sanitizes it and puts the result from the function assigned to
         series_get_image into _img_data. series_get_image gets called with a position starting from 0, all other series
         pos values start at one as shown to the user.
+        Updates the file info and motor position values.
         :param pos: Image position in the series to load, starting at 1
         """
         pos = min(max(pos, 1), self.series_max)
@@ -486,6 +489,8 @@ class ImgModel(object):
 
         self.series_pos = pos
         self._img_data = self.series_get_image(pos - 1)
+        self.file_info = self._get_h5_file_info(self.filename, pos - 1)
+        self.motors_info = self._get_h5_motors_info(self.filename, pos - 1)
 
         self._perform_img_transformations()
         self._calculate_img_data()
@@ -844,12 +849,12 @@ class ImgModel(object):
 
     def _get_motors_info(self, image):
         """
-        reads the file info from tif_tags and returns positions of vertical, horizontal, focus and omega motors
+        reads the file info from tif_tags and returns positions of vertical, horizontal, and focus motors
         """
         result = {}
         tags = image.tag
 
-        useful_tags = ["Horizontal:", "Vertical:", "Focus:", "Omega:"]
+        useful_tags = ['Horizontal:', 'Vertical:', 'Focus:']
 
         try:
             tag_values = tags.itervalues()
@@ -861,6 +866,62 @@ class ImgModel(object):
                 if key in str(value):
                     k, v = str(value[0]).split(":")
                     result[str(k)] = float(v)
+        return result
+
+    def _get_h5_file_info(self, filename, frame_index=0):
+        """
+        Reads the file info from h5 metadata and returns a string of file info for a specific frame.
+        """
+        result = []
+
+        def find_attrs(name, obj):
+            if name.endswith("NDAttributes") and isinstance(obj, h5py.Group):
+                for dataset_name, dataset in obj.items():
+                    if isinstance(dataset, h5py.Dataset):
+                        value = dataset[()]
+                        if isinstance(value, bytes):
+                            value = value.decode('utf-8')
+                        elif isinstance(value, (list, tuple, np.ndarray)):
+                            value = [v.decode('utf-8') if isinstance(v, bytes) else v for v in value]
+                            if len(value) > frame_index:
+                                value = value[frame_index]
+                            else:
+                                value = value[0] if len(value) == 1 else value
+                        if not dataset_name.startswith("NDArray"):
+                            result.append(f"{dataset_name}: {value}")
+
+        with h5py.File(filename, "r") as h5_file:
+            h5_file.visititems(find_attrs)
+
+        return "\n".join(result)
+    
+    def _get_h5_motors_info(self, filename, frame_index=0):
+        """
+        Reads the motor positions from h5 metadata and returns a dictionary of motor info for a specific frame.
+        """
+        result = {}
+
+        def find_attrs(name, obj):
+            if name.endswith("NDAttributes") and isinstance(obj, h5py.Group):
+                for dataset_name, dataset in obj.items():
+                    if isinstance(dataset, h5py.Dataset):
+                        value = dataset[()]
+                        if isinstance(value, bytes):
+                            value = value.decode('utf-8')
+                        elif isinstance(value, (list, tuple, np.ndarray)):
+                            value = [v.decode('utf-8') if isinstance(v, bytes) else v for v in value]
+                            if len(value) > frame_index:
+                                value = value[frame_index]
+                            else:
+                                value = value[0] if len(value) == 1 else value
+                        try:
+                            result[dataset_name] = float(value)
+                        except ValueError:
+                            result[dataset_name] = value
+
+        with h5py.File(filename, "r") as h5_file:
+            h5_file.visititems(find_attrs)
+
         return result
 
     @property

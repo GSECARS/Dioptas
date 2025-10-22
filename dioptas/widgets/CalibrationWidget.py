@@ -453,12 +453,12 @@ class DetectorGroupbox(QtWidgets.QGroupBox):
         self._grid_layout1 = QtWidgets.QGridLayout()
 
         self._grid_layout1.addWidget(LabelAlignRight('Pixel width:'), 1, 0)
-        self.pixel_width_txt = NumberTextField('79')
+        self.pixel_width_txt = NumberTextField('75')
         self._grid_layout1.addWidget(self.pixel_width_txt, 1, 1)
         self._grid_layout1.addWidget(QtWidgets.QLabel('um'), 1, 2)
 
         self._grid_layout1.addWidget(LabelAlignRight('Pixel height:'), 2, 0)
-        self.pixel_height_txt = NumberTextField('79')
+        self.pixel_height_txt = NumberTextField('75')
         self._grid_layout1.addWidget(self.pixel_height_txt, 2, 1)
         self._grid_layout1.addWidget(QtWidgets.QLabel('um'), 2, 2)
 
@@ -571,7 +571,7 @@ class PeakSelectionGroupBox(QtWidgets.QGroupBox):
         self._layout.addWidget(LabelAlignRight('Search size:'), 4, 0)
         self.search_size_sb = SpinBoxAlignRight()
         self.search_size_sb.setValue(10)
-        self.search_size_sb.setMaximumWidth(50)
+        self.search_size_sb.setMaximumWidth(75)
         self._layout.addWidget(self.search_size_sb, 4, 1, 1, 2)
         self._layout.addItem(QtWidgets.QSpacerItem(0, 0, QtWidgets.QSizePolicy.Expanding,
                                                    QtWidgets.QSizePolicy.Minimum), 4, 2, 1, 2)

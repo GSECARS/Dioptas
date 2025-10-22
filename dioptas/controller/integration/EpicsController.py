@@ -54,7 +54,6 @@ class EpicsController(object):
         self.hor_motor_name = epics_config['sample_position_x']
         self.ver_motor_name = epics_config['sample_position_y']
         self.focus_motor_name = epics_config['sample_position_z']
-        self.omega_motor_name = epics_config['sample_position_omega']
 
         self.connect_signals()
 
@@ -75,9 +74,8 @@ class EpicsController(object):
         hor = epics.caget(self.hor_motor_name + '.RBV', as_string=True)
         ver = epics.caget(self.ver_motor_name + '.RBV', as_string=True)
         focus = epics.caget(self.focus_motor_name + '.RBV', as_string=True)
-        omega = epics.caget(self.omega_motor_name + '.RBV', as_string=True)
 
-        if ver is not None and hor is not None and focus is not None and omega is not None:
+        if ver is not None and hor is not None and focus is not None:
             self.epics_update_timer.start(1000)
         else:
             if self.epics_update_timer.isActive():
@@ -86,25 +84,21 @@ class EpicsController(object):
         self.move_widget.hor_lbl.setText(str(hor))
         self.move_widget.ver_lbl.setText(str(ver))
         self.move_widget.focus_lbl.setText(str(focus))
-        self.move_widget.omega_lbl.setText(str(omega))
 
     def update_image_position(self):
         try:
             self.move_widget.img_hor_lbl.setText('{:.3f}'.format(self.model.img_model.motors_info['Horizontal']))
             self.move_widget.img_ver_lbl.setText('{:.3f}'.format(self.model.img_model.motors_info['Vertical']))
             self.move_widget.img_focus_lbl.setText('{:.3f}'.format(self.model.img_model.motors_info['Focus']))
-            self.move_widget.img_omega_lbl.setText('{:.3f}'.format(self.model.img_model.motors_info['Omega']))
         except KeyError:
             self.move_widget.img_hor_lbl.setText("")
             self.move_widget.img_ver_lbl.setText("")
             self.move_widget.img_focus_lbl.setText("")
-            self.move_widget.img_omega_lbl.setText("")
 
     def move_stage(self):
         hor_pos = float(self.move_widget.img_hor_lbl.text())
         ver_pos = float(self.move_widget.img_ver_lbl.text())
         focus_pos = float(self.move_widget.img_focus_lbl.text())
-        omega_pos =float(self.move_widget.img_omega_lbl.text())
 
         if self.check_sample_point_distances(hor_pos, ver_pos, focus_pos):
             if self.move_widget.move_hor_cb.isChecked():
@@ -113,26 +107,15 @@ class EpicsController(object):
                 epics.caput(self.ver_motor_name + '.VAL', ver_pos)
             if self.move_widget.move_focus_cb.isChecked():
                 epics.caput(self.focus_motor_name + '.VAL', focus_pos)
-            if self.move_widget.move_omega_cb.isChecked():
-                if self.check_conditions() is False:
-                    self.show_error_message_box(
-                        'If you want to rotate the stage, please move mirrors and microscope in the right positions!')
-                    return
-                elif float(omega_pos) > -45.0 or float(omega_pos) < -135.0:
-                    self.show_error_message_box('Requested omega angle is not within the limits')
-                    return
-                else:
-                    epics.caput(self.omega_motor_name + '.VAL', omega_pos)
 
     def open_motors_setup_widget(self):
         self.move_widget.motors_setup_widget.hor_motor_txt.setText(self.hor_motor_name)
         self.move_widget.motors_setup_widget.ver_motor_txt.setText(self.ver_motor_name)
         self.move_widget.motors_setup_widget.focus_motor_txt.setText(self.focus_motor_name)
-        self.move_widget.motors_setup_widget.omega_motor_txt.setText(self.omega_motor_name)
         self.move_widget.motors_setup_widget.show()
 
     def get_motors(self):
-        self.hor_motor_name, self.ver_motor_name, self.focus_motor_name, self.omega_motor_name = \
+        self.hor_motor_name, self.ver_motor_name, self.focus_motor_name, = \
             self.move_widget.motors_setup_widget.return_motor_names()
         self.update_current_motor_position()
 
@@ -140,7 +123,6 @@ class EpicsController(object):
         self.move_widget.motors_setup_widget.hor_motor_txt.setText(epics_config['sample_position_x'])
         self.move_widget.motors_setup_widget.ver_motor_txt.setText(epics_config['sample_position_y'])
         self.move_widget.motors_setup_widget.focus_motor_txt.setText(epics_config['sample_position_z'])
-        self.move_widget.motors_setup_widget.omega_motor_txt.setText(epics_config['sample_position_omega'])
 
     def closeEvent(self, QCloseEvent):
         self.epics_update_timer.stop()
