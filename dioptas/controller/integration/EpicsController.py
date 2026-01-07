@@ -153,11 +153,11 @@ class EpicsController(object):
 
     @staticmethod
     def check_conditions():
-        if int(epics.caget('13IDD:m24.RBV')) > -105:
+        if int(epics.caget('13IDD:m103.RBV')) > -175:
             return False
-        elif int(epics.caget('13IDD:m23.RBV')) > -105:
+        elif int(epics.caget('13IDD:m102.RBV')) > -175:
             return False
-        elif int(epics.caget('13IDD:m67.RBV')) > -65:
+        elif int(epics.caget('13IDD:m67.RBV')) > -130:
             return False
         return True
 
