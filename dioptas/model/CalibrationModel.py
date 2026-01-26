@@ -186,21 +186,8 @@ class CalibrationModel(object):
         self.cake_geometry = AzimuthalIntegrator(
             splineFile=self.distortion_spline_filename
         )
-
-        pyFAI_parameter = self.pattern_geometry.getPyFAI()
-        pyFAI_parameter["wavelength"] = self.pattern_geometry.wavelength
-
-        self.cake_geometry.setPyFAI(
-            dist=pyFAI_parameter["dist"],
-            poni1=pyFAI_parameter["poni1"],
-            poni2=pyFAI_parameter["poni2"],
-            rot1=pyFAI_parameter["rot1"],
-            rot2=pyFAI_parameter["rot2"],
-            rot3=pyFAI_parameter["rot3"],
-        )
-
+        self.cake_geometry.set_config(self.pattern_geometry.get_config())
         self.cake_geometry.detector = self.detector
-        self.cake_geometry.wavelength = pyFAI_parameter["wavelength"]
 
     def setup_peak_search_algorithm(self, algorithm, mask=None):
         """
@@ -630,7 +617,32 @@ class CalibrationModel(object):
         if fit2d_parameter:
             fit2d_parameter["wavelength"] = self.pattern_geometry.wavelength
 
-        return pyFAI_parameter, fit2d_parameter
+        legacy_keys = [
+            "detector",
+            "pixel1",
+            "pixel2",
+            "dist",
+            "poni1",
+            "poni2",
+            "rot1",
+            "rot2",
+            "rot3",
+            "wavelength",
+            "polarization_factor",
+        ]
+        normalized = {}
+        for key in legacy_keys:
+            value = pyFAI_parameter.get(key)
+            if key == "detector" and isinstance(value, dict):
+                value = value.get("name") or value.get("type") or value.get("class")
+            if key in ("pixel1", "pixel2") and value is None:
+                value = getattr(self.pattern_geometry, key, None)
+            if key in ("pixel1", "pixel2") and value is None:
+                value = getattr(self.detector, key, None)
+            if value is not None:
+                normalized[key] = value
+
+        return normalized, fit2d_parameter
 
     def calculate_number_of_pattern_points(self, img_shape, max_dist_factor=1.5):
         # calculates the number of points for an integrated pattern, based on the distance of the beam center to the the
@@ -806,6 +818,48 @@ class CalibrationModel(object):
         self.pattern_geometry.wavelength = pyFAI_parameter["wavelength"]
         self.create_cake_geometry()
         self.polarization_factor = pyFAI_parameter["polarization_factor"]
+        self.is_calibrated = True
+        self.set_supersampling()
+
+    def get_pyFAI_config(self) -> dict:
+        """
+        Returns the pyFAI configuration of the geometry refinement object. The pyFAI_config is a dictionary.
+        """
+        return self.pattern_geometry.get_config()
+
+    def set_pyFAI_config(self, pyFAI_config):
+        """
+        Updates the pyFAI configuration of the geometry refinement object. The pyFAI_config is the dicionary extracted
+        from a azimuthal integrator object using the get_config() method.
+        """
+        self.pattern_geometry.set_config(pyFAI_config)
+        def _get_detector_pixel(config, key):
+            detector_config = config.get("detector_config")
+            if isinstance(detector_config, dict) and key in detector_config:
+                return detector_config[key]
+            detector = config.get("detector")
+            if isinstance(detector, dict) and key in detector:
+                return detector[key]
+            if isinstance(detector, dict):
+                detector_config = detector.get("config")
+                if isinstance(detector_config, dict) and key in detector_config:
+                    return detector_config[key]
+            return None
+
+        pixel1 = _get_detector_pixel(pyFAI_config, "pixel1")
+        pixel2 = _get_detector_pixel(pyFAI_config, "pixel2")
+        if pixel1 is None:
+            pixel1 = getattr(self.pattern_geometry, "pixel1", None)
+        if pixel2 is None:
+            pixel2 = getattr(self.pattern_geometry, "pixel2", None)
+        if pixel1 is None or pixel2 is None:
+            raise ValueError("pyFAI config is missing detector pixel size information")
+
+        self.detector.pixel1 = pixel1
+        self.detector.pixel2 = pixel2
+        self.orig_pixel1 = self.detector.pixel1
+        self.orig_pixel2 = self.detector.pixel2
+        self.create_cake_geometry()
         self.is_calibrated = True
         self.set_supersampling()
 

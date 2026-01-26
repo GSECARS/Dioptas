@@ -20,6 +20,7 @@
 
 import os
 import numpy as np
+import json
 
 from copy import deepcopy
 
@@ -310,13 +311,20 @@ class Configuration(object):
         old_unit = self.integration_unit
         self._integration_unit = new_unit
 
-        self.pattern_model.pattern.transform_x(
-            lambda x: convert_units(
-                x, self.calibration_model.wavelength, old_unit, new_unit
+        pattern = self.pattern_model.pattern
+        x = getattr(pattern, "x", None)
+        valid_units = {"2th_deg", "q_A^-1", "d_A"}
+        if old_unit not in valid_units or new_unit not in valid_units:
+            return
+        if old_unit == new_unit:
+            return
+        if x is not None and len(x) > 1:
+            pattern.transform_x(
+                lambda x: convert_units(
+                    x, self.calibration_model.wavelength, old_unit, new_unit
+                )
             )
-        )
-
-        self.integrate_image_1d()
+            self.integrate_image_1d()
 
     @property
     def correct_solid_angle(self):
@@ -542,6 +550,9 @@ class Configuration(object):
 
         # save calibration model
         calibration_group = f.create_group("calibration_model")
+        # version 2.0 is used to indicate that the pyFAI parameters are stored as a json string
+        calibration_group.attrs["version"] = "2.0"
+
         calibration_filename = self.calibration_model.filename
         if calibration_filename.endswith(".poni"):
             base_filename, ext = self.calibration_model.filename.rsplit(".", 1)
@@ -549,13 +560,13 @@ class Configuration(object):
             base_filename = self.calibration_model.filename
             ext = "poni"
         calibration_group.attrs["calibration_filename"] = base_filename + "." + ext
-        pyfai_param, _ = self.calibration_model.get_calibration_parameter()
-        pfp = calibration_group.create_group("pyfai_parameters")
-        for key in pyfai_param:
-            try:
-                pfp.attrs[key] = pyfai_param[key]
-            except TypeError:
-                pfp.attrs[key] = ""
+
+        pyfai_config = self.calibration_model.pattern_geometry.get_config()
+        calibration_group.attrs["pyfai_parameters"] = json.dumps(pyfai_config)
+        calibration_group.attrs["polarization_factor"] = (
+            self.calibration_model.polarization_factor
+        )
+
         calibration_group.attrs["correct_solid_angle"] = self.correct_solid_angle
         if self.calibration_model.distortion_spline_filename is not None:
             calibration_group.attrs["distortion_spline_filename"] = (
@@ -642,22 +653,42 @@ class Configuration(object):
         self.working_directories = working_directories
 
         # load pyFAI parameters
-        pyfai_parameters = {}
-        for key, value in (
-            f.get("calibration_model").get("pyfai_parameters").attrs.items()
-        ):
-            pyfai_parameters[key] = value
-
         try:
-            self.calibration_model.set_pyFAI(pyfai_parameters)
-            filename = f.get("calibration_model").attrs["calibration_filename"]
-            (file_path, base_name) = os.path.split(filename)
-            self.calibration_model.filename = filename
-            self.calibration_model.calibration_name = base_name
+            calibration_schema_version = f.get("calibration_model").attrs["version"]
+            if calibration_schema_version == "2.0":
+                # pyFAI parameters are stored as a json string
+                pyfai_config = json.loads(
+                    f.get("calibration_model").attrs["pyfai_parameters"]
+                )
+                self.calibration_model.set_pyFAI_config(pyfai_config)
 
+                # polarization factor is stored as an attribute (for some reason not in the pyFAI config)
+                self.calibration_model.polarization_factor = f.get(
+                    "calibration_model"
+                ).attrs["polarization_factor"]
         except (KeyError, ValueError):
-            print("Problem with saved pyFAI calibration parameters")
-            pass
+            # if the version is not set, we assume that the pyFAI parameters are stored in the old way
+            # pyFAI parameters are stored as attributes of the group
+            # this is the old way of storing pyFAI parameters
+            # and is kept for backwards compatibility
+            pyfai_parameters = {}
+            pyfai_parameters_group = f.get("calibration_model").get("pyfai_parameters")
+            if pyfai_parameters_group is not None:
+                for key, value in pyfai_parameters_group.attrs.items():
+                    pyfai_parameters[key] = value
+
+            try:
+                if pyfai_parameters:
+                    self.calibration_model.set_pyFAI(pyfai_parameters)
+
+            except (KeyError, ValueError):
+                print("Problem with saved pyFAI calibration parameters")
+                pass
+
+        filename = f.get("calibration_model").attrs["calibration_filename"]
+        (_, base_name) = os.path.split(filename)
+        self.calibration_model.filename = filename
+        self.calibration_model.calibration_name = base_name
 
         try:
             self.correct_solid_angle = f.get("calibration_model").attrs[
