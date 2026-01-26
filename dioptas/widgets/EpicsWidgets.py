@@ -40,8 +40,6 @@ class MoveStageWidget(QtWidgets.QWidget):
         self.img_hor_lbl = QtWidgets.QLabel(self)
         self.img_ver_lbl = QtWidgets.QLabel(self)
         self.img_focus_lbl = QtWidgets.QLabel(self)
-        self.img_omega_lbl = QtWidgets.QLabel(self)
-        self.img_omega_lbl.setStyleSheet('color: yellow')
         self.img_hor_lbl.setStyleSheet('color: yellow')
         self.img_ver_lbl.setStyleSheet('color: yellow')
         self.img_focus_lbl.setStyleSheet('color: yellow')
@@ -49,13 +47,11 @@ class MoveStageWidget(QtWidgets.QWidget):
         self.hor_lbl = QtWidgets.QLabel(self)
         self.ver_lbl = QtWidgets.QLabel(self)
         self.focus_lbl = QtWidgets.QLabel(self)
-        self.omega_lbl = QtWidgets.QLabel(self)
 
         # Create checkboxes
         self.move_hor_cb = QtWidgets.QCheckBox(self)
         self.move_ver_cb = QtWidgets.QCheckBox(self)
         self.move_focus_cb = QtWidgets.QCheckBox(self)
-        self.move_omega_cb = QtWidgets.QCheckBox(self)
 
         # Create grid layout
         grid_layout = QtWidgets.QGridLayout()
@@ -79,11 +75,6 @@ class MoveStageWidget(QtWidgets.QWidget):
         grid_layout.addWidget(self.focus_lbl, 3, 1)
         grid_layout.addWidget(self.img_focus_lbl, 3, 2)
         grid_layout.addWidget(self.move_focus_cb, 3, 3)
-
-        grid_layout.addWidget(LabelAlignRight("Omega:"), 4, 0)
-        grid_layout.addWidget(self.omega_lbl, 4, 1)
-        grid_layout.addWidget(self.img_omega_lbl, 4, 2)
-        grid_layout.addWidget(self.move_omega_cb, 4, 3)
 
         btn_layout = QtWidgets.QHBoxLayout()
         btn_layout.addWidget(self.connect_epics_btn)
@@ -115,12 +106,10 @@ class MotorsSetup(QtWidgets.QWidget):
         self.hor_lbl = LabelAlignRight('Hor:', self)
         self.ver_lbl = LabelAlignRight('Ver:', self)
         self.focus_lbl = LabelAlignRight('Focus:', self)
-        self.omega_lbl = LabelAlignRight('Omega:', self)
 
         self.hor_motor_txt = QtWidgets.QLineEdit(self)
         self.ver_motor_txt = QtWidgets.QLineEdit(self)
         self.focus_motor_txt = QtWidgets.QLineEdit(self)
-        self.omega_motor_txt = QtWidgets.QLineEdit(self)
 
         self.set_motor_names_btn = QtWidgets.QPushButton('Set', self)
         self.reread_config_btn = QtWidgets.QPushButton('Default config', self)
@@ -132,11 +121,9 @@ class MotorsSetup(QtWidgets.QWidget):
         grid.addWidget(self.hor_lbl, 1, 0)
         grid.addWidget(self.ver_lbl, 2, 0)
         grid.addWidget(self.focus_lbl, 3, 0)
-        grid.addWidget(self.omega_lbl, 4, 0)
         grid.addWidget(self.hor_motor_txt, 1, 1)
         grid.addWidget(self.ver_motor_txt, 2, 1)
         grid.addWidget(self.focus_motor_txt, 3, 1)
-        grid.addWidget(self.omega_motor_txt, 4, 1)
         grid.addWidget(self.set_motor_names_btn, 5, 1)
         grid.addWidget(self.reread_config_btn, 5, 0)
 
@@ -151,5 +138,4 @@ class MotorsSetup(QtWidgets.QWidget):
         self.raise_()
 
     def return_motor_names(self):
-        return str(self.hor_motor_txt.text()), str(self.ver_motor_txt.text()), str(self.focus_motor_txt.text()), str(
-            self.omega_motor_txt.text())
+        return str(self.hor_motor_txt.text()), str(self.ver_motor_txt.text()), str(self.focus_motor_txt.text())
