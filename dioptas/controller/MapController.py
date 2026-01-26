@@ -82,6 +82,7 @@ class MapController(object):
         self.model.clicked_tth_changed.connect(self.update_clicked_pos_label)
         self.model.clicked_azi_changed.connect(self.update_clicked_azi_label)
 
+        self.model.pattern_changed.connect(self.update_pattern)
         self.activate_model_signals()
 
     def activate(self):
@@ -90,12 +91,10 @@ class MapController(object):
 
     def activate_model_signals(self):
         self.model.img_changed.connect(self.update_image)
-        self.model.pattern_changed.connect(self.update_pattern)
         self.model.configuration_selected.connect(self.configuration_selected)
 
     def deactivate(self):
         self.model.img_changed.disconnect(self.update_image)
-        self.model.pattern_changed.disconnect(self.update_pattern)
         self.model.configuration_selected.disconnect(self.configuration_selected)
 
     def load_btn_clicked(self):
@@ -320,6 +319,10 @@ class MapController(object):
         )
 
         point_info = self.model.map_model.get_point_info(row, col)
+        if point_info is None:
+            self.widget.map_plot_control_widget.filename_label.setText(f"")
+            return
+
         if point_info.frame_index == 0:
             self.widget.map_plot_control_widget.filename_label.setText(
                 f"{point_info.filename}"

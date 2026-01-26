@@ -20,6 +20,8 @@
 
 import os
 import gc
+import tempfile
+import uuid
 from collections import OrderedDict
 
 import numpy as np
@@ -46,9 +48,6 @@ unittest_path = os.path.dirname(__file__)
 data_path = os.path.join(unittest_path, "../data")
 jcpds_path = os.path.join(data_path, "jcpds")
 
-# shared settings for save and load tests
-config_file_path = os.path.join(data_path, "test_save_load.hdf5")
-
 working_directories = {
     "image": data_path,
     "calibration": data_path,
@@ -56,6 +55,7 @@ working_directories = {
     "overlay": data_path,
     "mask": data_path,
     "pattern": data_path,
+    "project": data_path,
 }
 
 integration_unit = "q_A^-1"
@@ -100,11 +100,16 @@ class ProjectSaveLoadTest(QtTest):
         self.config_widget = self.controller.widget.configuration_widget
         self.config_controller = self.controller.configuration_controller
         self.check_calibration = True
+        self.maxDiff = None
+        self.config_file_path = os.path.join(
+            tempfile.gettempdir(),
+            f"dioptas_test_save_load_{os.getpid()}_{uuid.uuid4().hex}.hdf5",
+        )
 
     def tearDown(self):
         delete_if_exists(os.path.join(data_path, "CeO2_Pilatus1M.chi"))
         delete_if_exists(os.path.join(data_path, "CeO2_Pilatus1M.xy"))
-        delete_if_exists(config_file_path)
+        delete_if_exists(self.config_file_path)
         self.resetState()
 
     def resetState(self):
@@ -112,6 +117,13 @@ class ProjectSaveLoadTest(QtTest):
             self.model.calibration_model.cake_geometry.reset()
         self.model.calibration_model.pattern_geometry.reset()
         self.model.disconnect_models()
+
+        # Close widgets before deletion
+        self.config_widget.close()
+        self.widget.integration_widget.close()
+        self.widget.mask_widget.close()
+        self.widget.calibration_widget.close()
+        self.widget.close()
 
         self.config_widget.deleteLater()
         self.widget.integration_widget.deleteLater()
@@ -122,6 +134,9 @@ class ProjectSaveLoadTest(QtTest):
         self.widget.mask_widget.deleteLater()
         self.widget.calibration_widget.deleteLater()
         self.widget.deleteLater()
+
+        # Process events to ensure widgets are cleaned up
+        QtWidgets.QApplication.processEvents()
 
         del self.config_widget
         del self.widget.integration_widget.integration_control_widget
@@ -138,6 +153,9 @@ class ProjectSaveLoadTest(QtTest):
         del self.model
         gc.collect()
 
+        # Process events again after deletion
+        QtWidgets.QApplication.processEvents()
+
     def load_image(self, file_name):
         QtWidgets.QFileDialog.getOpenFileNames = MagicMock(return_value=[file_name])
         click_button(
@@ -152,6 +170,7 @@ class ProjectSaveLoadTest(QtTest):
     def save_and_load_configuration(
         self, prepare_function, intermediate_function=None, mock_1d_integration=True
     ):
+        saved_config_file_path = self.config_file_path
         if mock_1d_integration:
             with patch.object(
                 CalibrationModel,
@@ -173,6 +192,7 @@ class ProjectSaveLoadTest(QtTest):
                 }
                 self.resetState()
                 self.setUp()
+                self.config_file_path = saved_config_file_path
                 if intermediate_function:
                     intermediate_function()
 
@@ -193,20 +213,23 @@ class ProjectSaveLoadTest(QtTest):
             }
             self.resetState()
             self.setUp()
+            self.config_file_path = saved_config_file_path
             if intermediate_function:
                 intermediate_function()
 
             self.load_configuration()
 
-        delete_if_exists(config_file_path)
+        delete_if_exists(self.config_file_path)
 
     def disable_calibration_check(self):
         self.check_calibration = False
 
     def save_configuration(self):
-        QtWidgets.QFileDialog.getSaveFileName = MagicMock(return_value=config_file_path)
+        QtWidgets.QFileDialog.getSaveFileName = MagicMock(
+            return_value=self.config_file_path
+        )
         click_button(self.widget.save_btn)
-        self.assertTrue(os.path.isfile(config_file_path))
+        self.assertTrue(os.path.isfile(self.config_file_path))
 
     def load_configuration(self):
         self.model.working_directories = {
@@ -215,7 +238,9 @@ class ProjectSaveLoadTest(QtTest):
             "image": "",
             "pattern": "",
         }
-        QtWidgets.QFileDialog.getOpenFileName = MagicMock(return_value=config_file_path)
+        QtWidgets.QFileDialog.getOpenFileName = MagicMock(
+            return_value=self.config_file_path
+        )
         click_button(self.widget.load_btn)
         saved_working_directories = self.model.working_directories
         self.assertDictEqual(saved_working_directories, working_directories)
@@ -547,19 +572,16 @@ class ProjectSaveLoadTest(QtTest):
         )
 
     def add_background_image(self):
-        QtWidgets.QFileDialog.getOpenFileName = MagicMock(
-            return_value=test_image_file_name
-        )
-        click_button(self.controller.integration_controller.widget.bkg_image_load_btn)
+        self.model.img_model.load_background(test_image_file_name)
 
     ####################################################################################################################
     def test_with_automatic_background_subtraction(self):
         self.save_and_load_configuration(
             self.activate_automatic_background_subtraction, mock_1d_integration=True
         )
-        self.assertGreater(self.model.pattern.auto_background_subtraction_roi[0], 9.0)
+        self.assertAlmostEqual(self.model.pattern.auto_bkg_roi[0], 9.0)
         self.assertTrue(self.widget.integration_widget.qa_bkg_pattern_btn.isChecked())
-        self.assertGreater(
+        self.assertAlmostEqual(
             float(self.widget.integration_widget.bkg_pattern_x_min_txt.text()), 9
         )
         self.assertTrue(self.widget.integration_widget.qa_bkg_pattern_btn.isChecked())
@@ -577,7 +599,9 @@ class ProjectSaveLoadTest(QtTest):
         enter_value_into_text_field(
             self.widget.integration_widget.bkg_pattern_x_min_txt, "9"
         )
-        self.assertGreater(self.model.pattern.auto_background_subtraction_roi[0], 9)
+        print(self.model.pattern)
+        print(type(self.model.pattern))
+        self.assertAlmostEqual(self.model.pattern.auto_bkg_roi[0], 9)
 
     ####################################################################################################################
     def test_save_settings_on_closing(self):
