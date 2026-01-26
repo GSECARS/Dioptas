@@ -70,5 +70,13 @@ pytest-qt = "*"
 mock = "^5.1.0"
 
 [build-system]
-requires = ["poetry-core", "poetry-dynamic-versioning"]
-build-backend = "poetry_dynamic_versioning.backend"
+requires = ["setuptools>=68", "setuptools_scm[toml]>=8", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+version_file = "dioptas/_version.py"
+fallback_version = "0.7.2"
+
+[tool.setuptools_scm.scm.git]
+# Exclude tags containing underscore, which are invalid in PEP 440. When no tag remains, git describe fails and fallback_version is used.
+describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--abbrev=40", "--match", "*[0-9]*", "--exclude", "*_*"]
