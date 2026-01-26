@@ -188,5 +188,8 @@ $RECYCLE.BIN/
 # Mac desktop service store files
 .DS_Store
 
+# Mac share files
+._*
+
 .vscode/
 __pycache__/
