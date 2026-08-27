@@ -1,26 +1,15 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
+import logging
 import os
 import sys
 from sys import platform as _platform
+
+from .log import setup_logging
+
+setup_logging()
+
+logger = logging.getLogger(__name__)
 
 # If QT_API is not set, use PyQt6 by default
 if "QT_API" not in os.environ:
@@ -69,8 +58,61 @@ from .controller.MainController import MainController
 theme_path = os.path.join(style_path, "dark_orange.xml")
 qss_path = os.path.join(style_path, "qt_material.css")
 
+_dioptrin_available = False
+
+
+def _check_dioptrin_license():
+    """Check dioptrin license at startup. Returns True if usable."""
+    try:
+        import dioptrin
+
+        dioptrin.validate_license()
+        return True
+    except ImportError:
+        return False
+    except dioptrin.LicenseNotFoundError:
+        return False
+    except dioptrin.LicenseExpiredError:
+        QtWidgets.QMessageBox.warning(
+            None,
+            "Dioptrin License Expired",
+            "Your Dioptrin license has expired. "
+            "Dioptas will use pyFAI for integration.\n\n"
+            "Please renew your license to continue using Dioptrin.",
+        )
+        return False
+    except dioptrin.LicenseError:
+        return False
+
+
+def _set_application_icon(app):
+    """Application-wide icon, inherited by every top-level window.
+
+    On Windows the .ico is used: it carries pre-rendered 16-256 px entries,
+    which the shell can consume directly for the taskbar and Alt-Tab. The
+    other platforms take the SVG, which scales to any size Qt asks for.
+    """
+    from qtpy import QtGui
+
+    icon_file = "icon.ico" if _platform == "win32" else "icon.svg"
+    app.setWindowIcon(QtGui.QIcon(os.path.join(icons_path, icon_file)))
+
+
 def main():
+    global _dioptrin_available
+
+    if _platform == "win32":
+        # Windows resolves the taskbar button's icon through the application
+        # identity, not the window; without an explicit one it has to guess,
+        # which comes up empty on the first run of a fresh executable.
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "com.dioptas.Dioptas"
+        )
+
     app = QtWidgets.QApplication([])
+    _set_application_icon(app)
 
     apply_stylesheet(
         app,
@@ -79,7 +121,9 @@ def main():
         extra={"density_scale": -2},
     )
     sys.excepthook = excepthook
-    print("Dioptas {}".format(__version__))
+    logger.info("Dioptas %s", __version__)
+
+    _dioptrin_available = _check_dioptrin_license()
 
     if len(sys.argv) == 1:  # normal start
         controller = MainController()
@@ -93,13 +137,13 @@ def main():
         elif sys.argv[1].startswith("makeshortcut"):
             if make_shortcut is None:
                 raise ImportError("pyshortcuts not installed.  Try `pip install pyshortcuts`")
-            binary_dir = "Scripts" if os.name == "nt" else "bin"
             make_shortcut(
-                os.path.join(sys.exec_prefix, binary_dir, "dioptas"),
-                name = "Dioptas",
+                "-m dioptas",
+                name="Dioptas",
                 description="Dioptas 2D XRD {}".format(__version__),
-                icon=os.path.join(icons_path, "icon")
-                )
+                icon=os.path.join(icons_path, "icon"),
+                terminal=False,
+            )
 
         elif sys.argv[1].startswith("version"):
             print(__version__)

@@ -1,33 +1,30 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
+from __future__ import annotations
+
+import logging
 import os
-from scipy.interpolate import RegularGridInterpolator
 import numpy as np
 import h5py
 
+from pyFAI.multi_geometry import MultiGeometry
+
 from xypattern import Pattern
-from xypattern.combine import stitch_patterns
 
 from .util import Signal
 from .util import jcpds
+from .state import (
+    apply_params,
+    Derived,
+    PhaseParams,
+    ViewParams,
+    save_params,
+    load_params,
+    PROJECT_FORMAT_VERSION,
+)
+from .state import PayloadStore
+from .state.snapshot import StateRecorder
+from .state.project import save_project, load_project
 from .Configuration import Configuration
 from . import (
     ImgModel,
@@ -36,256 +33,426 @@ from . import (
     PhaseModel,
     PatternModel,
     OverlayModel,
-    MapModel,
     BatchModel,
 )
-from .MapModel2 import MapModel2
+from .MapModel import MapModel
 from .. import __version__
 
+logger = logging.getLogger(__name__)
 
-class DioptasModel(object):
-    """
-    Handles all the data used in Dioptas. Image, Calibration and Mask are handled by so called configurations.
+
+class UnsupportedProjectFileError(Exception):
+    """A .dio file this version cannot read (written before format 2)."""
+
+
+class DioptasModel:
+    """Handles all the data used in Dioptas.
+
+    Image, Calibration and Mask are handled by so called configurations.
     Patterns and overlays are global and always the same, no matter which configuration is selected.
     """
 
-    def __init__(self):
-        super(DioptasModel, self).__init__()
-        self.configurations = []
-        self.configuration_ind = 0
+    def __init__(self) -> None:
+        super().__init__()
+        self.configurations: list[Configuration] = []
+        self.configuration_ind: int = 0
         self.configurations.append(Configuration())
 
-        self._overlay_model = OverlayModel()
-        self._phase_model = PhaseModel()
+        self._overlay_model: OverlayModel = OverlayModel()
+        self._phase_model: PhaseModel = PhaseModel()
 
-        self._combine_patterns = False
-        self._combine_cakes = False
-        self._cake_data = None
+        # GUI view state (see ViewParams). A single stable instance for the
+        # model's lifetime — load() applies fields onto it, so controllers'
+        # event subscriptions stay valid.
+        self.view: ViewParams = ViewParams()
 
-        self.configuration_added = Signal()
-        self.configuration_selected = Signal(int)  # new index
-        self.configuration_removed = Signal(int)  # removed index
+        self._combine_patterns: bool = False
+        self._combine_cakes: bool = False
+        self._cake_data: np.ndarray | None = None
+        self._cake_tth: np.ndarray | None = None
+        self._cake_azi: np.ndarray | None = None
 
-        self.img_changed = Signal()
-        self.pattern_changed = Signal()
-        self.cake_changed = Signal()
-        self.enabled_phases_in_cake = Signal()
+        self._multi_geometry: MultiGeometry | None = None
+        self._multi_geometry_unit: str | None = None
 
-        self.clicked_tth = 0
-        self.clicked_azi = 0
+        self.configurations[0].calibration_model.detector_reset.connect(
+            self.invalidate_multi_geometry
+        )
+        self.configurations[0].calibration_model.parameters_changed.connect(
+            self.invalidate_multi_geometry
+        )
 
-        self.clicked_tth_changed = Signal()
-        self.clicked_azi_changed = Signal()
+        self.configuration_added: Signal = Signal()
+        self.configuration_selected: Signal = Signal(int)  # new index
+        self.configuration_removed: Signal = Signal(int)  # removed index
+
+        self.img_changed: Signal = Signal()
+        self.mask_changed: Signal = Signal()
+        self.pattern_changed: Signal = Signal()
+        self.cake_changed: Signal = Signal()
+        self.enabled_phases_in_cake: Signal = Signal()
+
+        # the store-level settings-change surface: forwards every params
+        # field change of the CURRENT configuration as (field, new, old);
+        # stable across configuration switches (rewired in connect_models).
+        # Sub-model params are namespaced by prefix: e.g. the ImgModel's
+        # factor arrives as "img.factor"; Configuration fields are unprefixed.
+        self.configuration_params_changed: Signal = Signal(str, object, object)
+
+        # convenience signal for the most-consumed field, emitting
+        # (new_unit, previous_unit); derived from the forwarding above
+        self.integration_unit_changed: Signal = Signal(str, str)
+
+        self.clicked_tth: float = 0
+        self.clicked_azi: float = 0
+
+        self.clicked_tth_changed: Signal = Signal()
+        self.clicked_azi_changed: Signal = Signal()
         self.clicked_tth_changed.connect(self.update_clicked_tth)
         self.clicked_azi_changed.connect(self.update_clicked_azi)
 
+        # Combined cake across all configurations: recomputed when any
+        # configuration's cake changes, gated by combine_cakes. Registered
+        # before connect_models so the recompute runs before the cake_changed
+        # forwarding to the GUI.
+        self._combined_cake: Derived = Derived(
+            self.calculate_combined_cake, active=False
+        )
+        self._combined_cake.add_dependency(self.configurations[0].cake_changed)
+
         self.connect_models()
 
-    def add_configuration(self):
+        # the phase model is global (not per-configuration), so its params
+        # events are forwarded once and never rewired
+        self._phase_model.params.events.connect(self._on_phase_params_event)
+        # map windows can subtract an overlay; an edited overlay has to reach
+        # every configuration's map, not only the current one
+        self._overlay_model.overlay_added.connect(self._on_overlays_changed_for_maps)
+        self._overlay_model.overlay_removed.connect(
+            self._on_overlays_changed_for_maps
+        )
+        self._overlay_model.overlay_changed.connect(
+            self._on_overlays_changed_for_maps
+        )
+
+        # Owned binary payloads (mask pixels; overlay data in later steps),
+        # content-addressed so snapshots and configurations share them by id.
+        self.payloads: PayloadStore = PayloadStore()
+
+        # Undo/redo. Constructed last: it subscribes to the signals above and
+        # captures a baseline snapshot, so everything it snapshots must exist.
+        self._recorder: StateRecorder = StateRecorder(self)
+
+    def add_configuration(self) -> None:
+        """Adds a new configuration to the list of configurations.
+
+        The new configuration will have the same working directories as the currently selected.
         """
-        Adds a new configuration to the list of configurations. The new configuration will have the same working
-        directories as the currently selected.
-        """
+        logger.info("Adding new configuration")
         self.configurations.append(Configuration(self.working_directories))
 
-        if self.current_configuration.calibration_model.is_calibrated:
+        source_calibration = self.current_configuration.calibration_model
+        if source_calibration.is_calibrated:
             dioptas_config_folder = os.path.join(os.path.expanduser("~"), ".Dioptas")
             if not os.path.isdir(dioptas_config_folder):
                 os.mkdir(dioptas_config_folder)
-            self.current_configuration.calibration_model.save(
-                os.path.join(dioptas_config_folder, "transfer.poni")
-            )
-            self.configurations[-1].calibration_model.load(
-                os.path.join(dioptas_config_folder, "transfer.poni")
-            )
+            # the calibration is transferred through a temporary poni file;
+            # save()/load() overwrite the calibration name and filename, so
+            # they are restored afterwards for both configurations
+            calibration_name = source_calibration.calibration_name
+            calibration_filename = source_calibration.filename
+            transfer_path = os.path.join(dioptas_config_folder, "transfer.poni")
+            source_calibration.save(transfer_path)
+            self.configurations[-1].calibration_model.load(transfer_path)
+            for calibration_model in (
+                source_calibration,
+                self.configurations[-1].calibration_model,
+            ):
+                calibration_model.calibration_name = calibration_name
+                calibration_model.filename = calibration_filename
 
         self.configurations[-1].img_model._img_data = (
             self.current_configuration.img_model.img_data
         )
+        self.configurations[-1].calibration_model.detector_reset.connect(
+            self.invalidate_multi_geometry
+        )
+        self.configurations[-1].calibration_model.parameters_changed.connect(
+            self.invalidate_multi_geometry
+        )
+        self._combined_cake.add_dependency(self.configurations[-1].cake_changed)
 
         self.select_configuration(len(self.configurations) - 1)
+        self.invalidate_multi_geometry()
         self.configuration_added.emit()
 
-    def remove_configuration(self):
-        """
-        Removes the currently selected configuration.
-        """
+    def remove_configuration(self) -> None:
+        """Removes the currently selected configuration."""
+        logger.info("Removing configuration")
         if len(self.configurations) == 1:
             return
         ind = self.configuration_ind
+        self.configurations[ind].calibration_model.detector_reset.disconnect(
+            self.invalidate_multi_geometry
+        )
+        self.configurations[ind].calibration_model.parameters_changed.disconnect(
+            self.invalidate_multi_geometry
+        )
         self.disconnect_models()
         del self.configurations[ind]
         if ind == len(self.configurations) or ind == -1:
             self.configuration_ind = len(self.configurations) - 1
         self.connect_models()
+        self.invalidate_multi_geometry()
         self.configuration_removed.emit(self.configuration_ind)
 
-    def save(self, filename):
-        """
-        Saves the current state of the model in a h5py file. file-ending can be chosen as wanted. Usually Dioptas
-        projects are saved as *.dio files.
-        """
-        f = h5py.File(filename, "w")
+    def save(self, filename: str) -> None:
+        """Saves the current state of the model in a h5py file.
 
+        The file ending can be chosen freely. Dioptas projects normally use
+        the ``.dio`` suffix.
+        """
+        logger.info("Saving project to %s", filename)
+        # Write into a sibling temp file and swap it in atomically: a save
+        # that fails partway (or a crash mid-write) can then never destroy
+        # the previous project file, and the "unable to truncate a file
+        # which is already open" failure mode cannot reach the real file.
+        temp_filename = f"{filename}.tmp-{os.getpid()}"
+        try:
+            f = h5py.File(temp_filename, "w")
+            try:
+                self._save_into(f)
+            finally:
+                f.close()
+            os.replace(temp_filename, filename)
+        finally:
+            if os.path.isfile(temp_filename):
+                os.remove(temp_filename)
+
+    def _save_into(self, f: h5py.File) -> None:
+        # __version__ records which Dioptas wrote the file (informational);
+        # format_version is the layout version the loader branches on — see
+        # dioptas/model/state/hdf5.py for the versioning policy
         f.attrs["__version__"] = __version__
+        f.attrs["format_version"] = PROJECT_FORMAT_VERSION
+        save_project(self, f)
 
-        # save configuration
-        configurations_group = f.create_group("configurations")
-        configurations_group.attrs["selected_configuration"] = self.configuration_ind
-        for ind, configuration in enumerate(self.configurations):
-            configuration_group = configurations_group.create_group(str(ind))
-            configuration.save_in_hdf5(configuration_group)
+    def load(self, filename: str) -> None:
+        """Loads a previously saved model (see save function) from an h5py file."""
+        logger.info("Loading project from %s", filename)
 
-        # save overlays
-        overlay_group = f.create_group("overlays")
+        # refuse old files before touching the current session, so a refusal
+        # never leaves a half-loaded state behind
+        with h5py.File(filename, "r") as probe:
+            format_version = int(probe.attrs.get("format_version", 0))
+        if format_version < PROJECT_FORMAT_VERSION:
+            raise UnsupportedProjectFileError(
+                f"{os.path.basename(filename)} was written by Dioptas 0.8.7 "
+                "or earlier. The project layout changed with the state "
+                "migration; please open the file with the Dioptas version "
+                "that wrote it (older releases stay available on PyPI and "
+                "GitHub) and re-export what you need."
+            )
 
-        for ind, overlay in enumerate(self.overlay_model.overlays):
-            ov = overlay_group.create_group(
-                str(ind).zfill(5)
-            )  # need to fill the ind string, in order to keep it
-            # ordered also for larger numbers of overlays
-            ov.attrs["name"] = overlay.name
-            x, y = overlay.original_data
-            ov.create_dataset("x", x.shape, "f", x)
-            ov.create_dataset("y", y.shape, "f", y)
-            ov.attrs["scaling"] = overlay.scaling
-            ov.attrs["offset"] = overlay.offset
-
-        # save phases
-        phases_group = f.create_group("phases")
-        for ind, phase in enumerate(self.phase_model.phases):
-            phase_group = phases_group.create_group(str(ind))
-            phase_group.attrs["name"] = phase._name
-            phase_group.attrs["filename"] = phase._filename
-            phase_parameter_group = phase_group.create_group("params")
-            for key in phase.params:
-                if key == "comments":
-                    phases_comments_group = phase_group.create_group("comments")
-                    for ind, comment in enumerate(phase.params["comments"]):
-                        phases_comments_group.attrs[str(ind)] = comment
-                else:
-                    phase_parameter_group.attrs[key] = phase.params[key]
-            phase_reflections_group = phase_group.create_group("reflections")
-            for ind, reflection in enumerate(phase.reflections):
-                phase_reflection_group = phase_reflections_group.create_group(str(ind))
-                phase_reflection_group.attrs["d0"] = reflection.d0
-                phase_reflection_group.attrs["d"] = reflection.d
-                phase_reflection_group.attrs["intensity"] = reflection.intensity
-                phase_reflection_group.attrs["h"] = reflection.h
-                phase_reflection_group.attrs["k"] = reflection.k
-                phase_reflection_group.attrs["l"] = reflection.l
-        f.flush()
-        f.close()
-
-    def load(self, filename):
-        """
-        Loads a previously saved model (see save function) from an h5py file.
-        """
         self.disconnect_models()
 
+        # close the file even when loading fails partway — a leaked open
+        # handle blocks any later save of the same file
         f = h5py.File(filename, "r")
+        try:
+            # a loaded project is a starting point, not an edit: undoing back
+            # into the previous session's state would be surprising
+            with self.history.suspended():
+                self._load_from(f)
+        finally:
+            f.close()
+        self.history.reset()
 
-        # delete old configurations
-        for config in self.configurations:
-            del config.img_model
-            del config.calibration_model
-            del config.mask_model
-            import gc
-
-            gc.collect()
-
-        # load_configurations
-        self.configurations = []
-        for ind, configuration_group in f.get("configurations").items():
-            configuration = Configuration()
-            configuration.load_from_hdf5(configuration_group)
-            self.configurations.append(configuration)
-        self.configuration_ind = f.get("configurations").attrs["selected_configuration"]
-
-        self.connect_models()
-        self.configuration_added.emit()
-        self.select_configuration(self.configuration_ind)
-
-        # load phase model
-        for ind, phase_group in f.get("phases").items():
-            new_jcpds = jcpds()
-            new_jcpds.name = phase_group.attrs.get("name")
-            new_jcpds.filename = phase_group.attrs.get("filename")
-            for p_key, p_value in phase_group.get("params").attrs.items():
-                new_jcpds.params[p_key] = p_value
-            for c_key, comment in phase_group.get("comments").attrs.items():
-                new_jcpds.params["comments"].append(comment)
-            for r_key, reflection in phase_group.get("reflections").items():
-                new_jcpds.add_reflection(
-                    reflection.attrs["h"],
-                    reflection.attrs["k"],
-                    reflection.attrs["l"],
-                    reflection.attrs["intensity"],
-                    reflection.attrs["d"],
-                )
-            new_jcpds.params["modified"] = bool(
-                phase_group.get("params").attrs["modified"]
-            )
-            self.phase_model.phase_files.append(new_jcpds.filename)
-            self.phase_model.add_jcpds_object(new_jcpds)
-
-        # load overlay model
-        for ind, overlay_group in f.get("overlays").items():
-            self.overlay_model.add_overlay(
-                overlay_group.get("x")[...],
-                overlay_group.get("y")[...],
-                overlay_group.attrs["name"],
-            )
-            index = len(self.overlay_model.overlays) - 1
-            self.overlay_model.set_overlay_offset(index, overlay_group.attrs["offset"])
-            self.overlay_model.set_overlay_scaling(
-                index, overlay_group.attrs["scaling"]
+    def _load_from(self, f: h5py.File) -> None:
+        format_version = int(f.attrs.get("format_version", 0))
+        if format_version > PROJECT_FORMAT_VERSION:
+            logger.warning(
+                "Project file %s has format_version %d, newer than supported %d "
+                "— loading best-effort, some settings may be missed",
+                f.filename,
+                format_version,
+                PROJECT_FORMAT_VERSION,
             )
 
-        f.close()
+        self.delete_configurations()
+        load_project(self, f, Configuration)
 
-    def select_configuration(self, ind):
+    def attach_configuration(self, configuration: Configuration) -> None:
+        """Adds an already-built configuration and wires its signals.
+
+        Used by project loading, which constructs configurations from the
+        file rather than through add_configuration (that one copies the
+        current calibration and selects the new configuration).
         """
-        Selects a configuration specified by the ind(ex) as current model. This will reemit all needed signals, so that
-        the GUI can update accordingly
+        configuration.calibration_model.detector_reset.connect(
+            self.invalidate_multi_geometry
+        )
+        configuration.calibration_model.parameters_changed.connect(
+            self.invalidate_multi_geometry
+        )
+        self._combined_cake.add_dependency(configuration.cake_changed)
+        self.configurations.append(configuration)
+
+    def select_configuration(self, ind: int) -> None:
+        """Selects a configuration specified by the index as current model.
+
+        This will reemit all needed signals, so that the GUI can update accordingly.
         """
         if 0 <= ind < len(self.configurations):
             self.disconnect_models()
             self.configuration_ind = ind
             self.connect_models()
             self.configuration_selected.emit(ind)
-            self.current_configuration.auto_integrate_pattern = False
-            if self.combine_cakes:
-                self.current_configuration.auto_integrate_cake = False
-            self.img_changed.emit()
-            self.current_configuration.auto_integrate_pattern = True
-            if self.combine_cakes:
-                self.current_configuration.auto_integrate_cake = True
+            # suppress integrations indirectly triggered by GUI handlers of
+            # the re-emitted signals — nothing changed, we only re-render
+            with self.current_configuration.pattern_integration.hold(
+                flush=False
+            ), self.current_configuration.cake_integration.hold(flush=False):
+                self.img_changed.emit()
+                self.mask_changed.emit()
             self.pattern_changed.emit()
             self.cake_changed.emit()
 
-    def disconnect_models(self):
-        """
-        Disconnects signals of the currently selected configuration.
-        """
+    def disconnect_models(self) -> None:
+        """Disconnects signals of the currently selected configuration."""
         self.img_model.img_changed.disconnect(self.img_changed)
+        self.mask_model.mask_changed.disconnect(self.mask_changed)
         self.pattern_model.pattern_changed.disconnect(self.pattern_changed)
         self.current_configuration.cake_changed.disconnect(self.cake_changed)
+        self.current_configuration.params.events.disconnect(
+            self._on_configuration_params_event, missing_ok=True
+        )
+        self.img_model.params.events.disconnect(
+            self._on_img_params_event, missing_ok=True
+        )
+        self.pattern_model.params.events.disconnect(
+            self._on_pattern_params_event, missing_ok=True
+        )
+        self.mask_model.params.events.disconnect(
+            self._on_mask_params_event, missing_ok=True
+        )
+        self.calibration_model.params.events.disconnect(
+            self._on_calibration_params_event, missing_ok=True
+        )
+        self.map_model.params.events.disconnect(
+            self._on_map_params_event, missing_ok=True
+        )
+        self.map_model.roi_params_changed.disconnect(self._on_map_roi_params_changed)
 
-    def connect_models(self):
-        """
-        Connects signals of the currently selected configuration
-        """
+    def connect_models(self) -> None:
+        """Connects signals of the currently selected configuration."""
         self.img_model.img_changed.connect(self.img_changed, priority=True)
+        self.mask_model.mask_changed.connect(self.mask_changed)
         self.pattern_model.pattern_changed.connect(self.pattern_changed)
         self.current_configuration.cake_changed.connect(self.cake_changed)
+        self.current_configuration.params.events.connect(
+            self._on_configuration_params_event
+        )
+        self.img_model.params.events.connect(self._on_img_params_event)
+        self.pattern_model.params.events.connect(self._on_pattern_params_event)
+        self.mask_model.params.events.connect(self._on_mask_params_event)
+        self.calibration_model.params.events.connect(
+            self._on_calibration_params_event
+        )
+        self.map_model.params.events.connect(self._on_map_params_event)
+        # a map ROI carries its own evented params, which are not part of the
+        # MapParams group the line above follows
+        self.map_model.roi_params_changed.connect(self._on_map_roi_params_changed)
+        # overlays live here, not in the configuration, so the map model gets
+        # a resolver instead of a reference
+        self.map_model.overlay_lookup = self._map_overlay_lookup
+
+    def _map_overlay_lookup(self, name: str):
+        for overlay in self._overlay_model.overlays:
+            if overlay.name == name:
+                return overlay.x, overlay.y
+        return None
+
+    def _on_overlays_changed_for_maps(self, *_args) -> None:
+        # reset() deletes the configurations attribute outright and clears
+        # the overlays while it is gone — those maps are being discarded,
+        # so there is nothing to recompute
+        for configuration in getattr(self, "configurations", []):
+            configuration.map_model.overlays_changed()
+
+    def _on_map_roi_params_changed(self, field, new, old) -> None:
+        self.configuration_params_changed.emit("map.roi." + field, new, old)
+
+    def _on_configuration_params_event(self, info) -> None:
+        """Forwards a psygnal EmissionInfo from the current configuration's
+        params event group to the store-level signals."""
+        field = info.signal.name
+        new, old = info.args
+        self.configuration_params_changed.emit(field, new, old)
+        if field == "integration_unit":
+            self.integration_unit_changed.emit(new, old)
+
+    def _on_img_params_event(self, info) -> None:
+        new, old = info.args
+        self.configuration_params_changed.emit("img." + info.signal.name, new, old)
+
+    def _on_pattern_params_event(self, info) -> None:
+        new, old = info.args
+        if info.signal.name == "background_overlay_uid":
+            # the uid is the state; the Pattern object it names lives in the
+            # (global) overlay model, so the resolution happens here
+            self._resolve_background_overlay(self.current_configuration)
+        self.configuration_params_changed.emit(
+            "pattern." + info.signal.name, new, old
+        )
+
+    def _resolve_background_overlay(self, configuration) -> None:
+        pattern_model = configuration.pattern_model
+        uid = pattern_model.params.background_overlay_uid
+        if uid is None:
+            # not tracked by reference (e.g. an anonymous background restored
+            # from an old project file) — leave whatever is set alone
+            return
+        overlay = self.overlay_model.get_overlay_by_uid(uid) if uid else None
+        if pattern_model.background_pattern is not overlay:
+            pattern_model.background_pattern = overlay
+
+    def resolve_background_overlays(self) -> None:
+        """Re-points every configuration's pattern background at the overlay
+        its uid names. Called after bulk state changes (undo restore, project
+        load), where the uid may be applied before the overlay exists."""
+        for configuration in self.configurations:
+            self._resolve_background_overlay(configuration)
+
+    def _on_mask_params_event(self, info) -> None:
+        new, old = info.args
+        self.configuration_params_changed.emit("mask." + info.signal.name, new, old)
+
+    def _on_calibration_params_event(self, info) -> None:
+        new, old = info.args
+        self.configuration_params_changed.emit(
+            "calibration." + info.signal.name, new, old
+        )
+
+    def _on_map_params_event(self, info) -> None:
+        new, old = info.args
+        self.configuration_params_changed.emit("map." + info.signal.name, new, old)
+
+    def _on_phase_params_event(self, info) -> None:
+        new, old = info.args
+        self.configuration_params_changed.emit("phase." + info.signal.name, new, old)
 
     @property
-    def working_directories(self):
+    def history(self):
+        """Undo/redo over the settings and masks (see state/snapshot.py)."""
+        return self._recorder.history
+
+    @property
+    def working_directories(self) -> dict[str, str]:
         return self.current_configuration.working_directories
 
     @working_directories.setter
-    def working_directories(self, new):
+    def working_directories(self, new: dict[str, str]) -> None:
         self.current_configuration.working_directories = new
 
     @property
@@ -299,6 +466,10 @@ class DioptasModel(object):
     @property
     def mask_model(self) -> MaskModel:
         return self.configurations[self.configuration_ind].mask_model
+
+    @property
+    def mask_plugin_manager(self):
+        return self.configurations[self.configuration_ind].mask_plugin_manager
 
     @property
     def calibration_model(self) -> CalibrationModel:
@@ -321,7 +492,7 @@ class DioptasModel(object):
         return self.configurations[self.configuration_ind].batch_model
 
     @property
-    def map_model(self) -> MapModel2:
+    def map_model(self) -> MapModel:
         return self.configurations[self.configuration_ind].map_model
 
     @property
@@ -329,15 +500,15 @@ class DioptasModel(object):
         return self.configurations[self.configuration_ind].use_mask
 
     @use_mask.setter
-    def use_mask(self, new_val):
+    def use_mask(self, new_val: bool) -> None:
         self.configurations[self.configuration_ind].use_mask = new_val
 
     @property
-    def transparent_mask(self):
+    def transparent_mask(self) -> bool:
         return self.configurations[self.configuration_ind].transparent_mask
 
     @transparent_mask.setter
-    def transparent_mask(self, new_val):
+    def transparent_mask(self, new_val: bool) -> None:
         self.configurations[self.configuration_ind].transparent_mask = new_val
 
     @property
@@ -345,7 +516,7 @@ class DioptasModel(object):
         return self.current_configuration.integration_unit
 
     @integration_unit.setter
-    def integration_unit(self, new_val):
+    def integration_unit(self, new_val: str) -> None:
         self.current_configuration.integration_unit = new_val
 
     @property
@@ -359,166 +530,199 @@ class DioptasModel(object):
         else:
             return self._cake_data
 
-    def calculate_combined_cake(self):
-        """
-        Combines cakes from all configurations into one large cake.
-        """
-        self._activate_cake()
-        tth = self._get_combined_cake_tth()
-        azi = self._get_combined_cake_azi()
-        combined_tth, combined_azi = np.meshgrid(tth, azi)
-        combined_intensity = np.zeros(combined_azi.shape)
-
-        for configuration in self.configurations:
-            cake_interp2d = RegularGridInterpolator(
-                (
-                    configuration.calibration_model.cake_tth,
-                    configuration.calibration_model.cake_azi,
-                ),
-                configuration.calibration_model.cake_img.T,
-                method="linear",
-                fill_value=0,
-                bounds_error=False,
-            )
-            # TODO: check if it is correct to use tth, azi and not combined_tth and combined_azi
-            combined_intensity += cake_interp2d((tth, azi))
-        self._cake_data = combined_intensity
-
-    def _activate_cake(self):
-        """
-        Activates cake integration in all configurations.
-        """
-        for configuration in self.configurations:
-            if not configuration.auto_integrate_cake:
-                configuration.auto_integrate_cake = True
-                configuration.integrate_image_2d()
-
-    def _get_cake_tth_range(self):
-        """
-        Gives the range of two theta values of all cakes in the different configurations.
-        :return: (minimum two theta, maximum two theta)
-        """
-        self._activate_cake()
-        min_tth = []
-        max_tth = []
-        for ind in range(len(self.configurations)):
-            min_tth.append(np.min(self.configurations[ind].calibration_model.cake_tth))
-            max_tth.append(np.max(self.configurations[ind].calibration_model.cake_tth))
-        return np.min(min_tth), np.max(max_tth)
-
-    def _get_cake_azi_range(self):
-        """
-        Gives the range of azimuth values of all cakes in the different configurations.
-        :return: (minimum azimuth, maximum azimuth)
-        """
-        self._activate_cake()
-        min_azi = []
-        max_azi = []
-        for ind in range(len(self.configurations)):
-            min_azi.append(np.min(self.configurations[ind].calibration_model.cake_azi))
-            max_azi.append(np.max(self.configurations[ind].calibration_model.cake_azi))
-        return np.min(min_azi), np.max(max_azi)
-
-    def _get_combined_cake_tth(self):
-        """
-        Gives an 1d array of two theta values which covers the two theta range of the cakes in all configurations.
-        :return: two theta array
-        """
-        min_tth, max_tth = self._get_cake_tth_range()
-        return np.linspace(min_tth, max_tth, 2048)
-
-    def _get_combined_cake_azi(self):
-        """
-        Gives an 1d array of azimuth values which covers the azimuth range of the cakes in all configurations.
-        :return: two theta array
-        """
-        min_azi, max_azi = self._get_cake_azi_range()
-        return np.linspace(min_azi, max_azi, 2048)
-
-    @property
-    def cake_tth(self):
-        if not self.combine_cakes:
-            return self.calibration_model.cake_tth
-        else:
-            return self._get_combined_cake_tth()
-
-    @property
-    def cake_azi(self):
-        if not self.combine_cakes:
-            return self.calibration_model.cake_azi
-        else:
-            return self._get_combined_cake_azi()
-
     @property
     def pattern(self) -> Pattern:
         if not self.combine_patterns:
             return self.pattern_model.pattern
         else:
-            return stitch_patterns(
-                [
-                    configuration.pattern_model.pattern
-                    for configuration in self.configurations
-                ]
-            )
+            return self._integrate_combined_1d()
 
     @property
     def combine_patterns(self) -> bool:
         return self._combine_patterns
 
     @combine_patterns.setter
-    def combine_patterns(self, new_val):
+    def combine_patterns(self, new_val: bool) -> None:
         self._combine_patterns = new_val
         self.pattern_changed.emit()
 
-    def save_combined_pattern(self, filename):
-        """
-        Saves the current integrated pattern
-        :param filename: where to save the file
-        """
+    def save_combined_pattern(self, filename: str) -> None:
+        """Saves the current integrated pattern."""
         self.pattern.save(filename, unit=self.integration_unit)
 
     @property
-    def combine_cakes(self):
-        """
-        :rtype: bool
-        """
+    def combine_cakes(self) -> bool:
         return self._combine_cakes
 
     @combine_cakes.setter
-    def combine_cakes(self, new_val):
+    def combine_cakes(self, new_val: bool) -> None:
         self._combine_cakes = new_val
+        self._combined_cake.active = new_val
         if new_val:
-            for configuration in self.configurations:
-                configuration.cake_changed.connect(self.calculate_combined_cake)
-            self.calculate_combined_cake()
-        else:
-            for configuration in self.configurations:
-                configuration.cake_changed.disconnect(self.calculate_combined_cake)
+            self._combined_cake.recompute()
         self.cake_changed.emit()
 
-    def reset(self):
+    def _get_multi_geometry(self, unit: str = "2th_deg") -> MultiGeometry:
+        """Returns a cached pyFAI MultiGeometry from all configurations' geometries.
+
+        The MultiGeometry is recreated only when the unit changes or when invalidated.
         """
-        Resets the state of the model. It only remembers the current working directories of the currently selected
+        if self._multi_geometry is None or self._multi_geometry_unit != unit:
+            ais = [
+                config.calibration_model.pattern_geometry
+                for config in self.configurations
+            ]
+            self._multi_geometry = MultiGeometry(ais, unit=unit)
+            self._multi_geometry_unit = unit
+        return self._multi_geometry
+
+    def invalidate_multi_geometry(self) -> None:
+        """Invalidates the cached MultiGeometry so it is recreated on next use."""
+        self._multi_geometry = None
+        self._multi_geometry_unit = None
+
+    def _get_lst_data_and_masks(self) -> tuple[list[np.ndarray], list[np.ndarray | None]]:
+        """Collects image data and masks from all configurations."""
+        lst_data: list[np.ndarray] = []
+        lst_mask: list[np.ndarray | None] = []
+        for configuration in self.configurations:
+            lst_data.append(configuration.img_model.img_data)
+            if configuration.use_mask:
+                lst_mask.append(configuration.mask_model.get_mask())
+            elif configuration.mask_model.roi is not None:
+                lst_mask.append(configuration.mask_model.roi_mask)
+            else:
+                lst_mask.append(None)
+        return lst_data, lst_mask
+
+    def _integrate_combined_1d(self) -> Pattern:
+        """Uses pyFAI MultiGeometry to integrate all configurations into a single 1D pattern."""
+        unit = self.integration_unit
+        mg_unit = "2th_deg" if unit == "d_A" else unit
+
+        mg = self._get_multi_geometry(unit=mg_unit)
+        # Reset cached ranges so they're recalculated if geometry changed
+        mg.radial_range = None
+        mg.azimuth_range = None
+
+        lst_data, lst_mask = self._get_lst_data_and_masks()
+
+        num_points = self.current_configuration.integration_rad_points
+        if num_points is None:
+            num_points = self.calibration_model.calculate_number_of_pattern_points(
+                self.img_model.img_data.shape, 2
+            )
+
+        polarization_factor = self.calibration_model.polarization_factor
+        correct_solid_angle = self.calibration_model.correct_solid_angle
+
+        result = mg.integrate1d(
+            lst_data,
+            npt=num_points,
+            correctSolidAngle=correct_solid_angle,
+            polarization_factor=polarization_factor,
+            lst_mask=lst_mask,
+        )
+
+        x = result.radial
+        y = result.intensity
+
+        if unit == "d_A":
+            wavelength = self.calibration_model.pattern_geometry.wavelength
+            x = wavelength / (2 * np.sin(x / 360 * np.pi)) * 1e10
+
+        return Pattern(x, y)
+
+    def calculate_combined_cake(self) -> None:
+        """Uses pyFAI MultiGeometry to combine cakes from all configurations."""
+        self._activate_cake()
+
+        unit = self.integration_unit
+        mg_unit = "2th_deg" if unit == "d_A" else unit
+
+        mg = self._get_multi_geometry(unit=mg_unit)
+        # Reset cached ranges so they're recalculated if geometry changed
+        mg.radial_range = None
+        mg.azimuth_range = None
+
+        lst_data, lst_mask = self._get_lst_data_and_masks()
+
+        num_points = self.current_configuration.integration_rad_points
+        if num_points is None:
+            num_points = self.calibration_model.calculate_number_of_pattern_points(
+                self.img_model.img_data.shape, 2
+            )
+
+        azimuth_points = self.current_configuration.cake_azimuth_points
+        polarization_factor = self.calibration_model.polarization_factor
+        correct_solid_angle = self.calibration_model.correct_solid_angle
+
+        result = mg.integrate2d(
+            lst_data,
+            npt_rad=num_points,
+            npt_azim=azimuth_points,
+            correctSolidAngle=correct_solid_angle,
+            polarization_factor=polarization_factor,
+            lst_mask=lst_mask,
+        )
+
+        self._cake_data = result.intensity
+        self._cake_tth = result.radial
+        self._cake_azi = result.azimuthal
+
+    def _activate_cake(self) -> None:
+        """Activates cake integration in all configurations."""
+        for configuration in self.configurations:
+            if not configuration.auto_integrate_cake:
+                configuration.auto_integrate_cake = True
+                configuration.integrate_image_2d()
+
+    @property
+    def cake_tth(self) -> np.ndarray | None:
+        if not self.combine_cakes:
+            return self.calibration_model.cake_tth
+        else:
+            return self._cake_tth
+
+    @property
+    def cake_azi(self) -> np.ndarray | None:
+        if not self.combine_cakes:
+            return self.calibration_model.cake_azi
+        else:
+            return self._cake_azi
+
+    def reset(self) -> None:
+        """Resets the state of the model.
+
+        It only remembers the current working directories of the currently selected
         configuration. Everything else including all configurations is deleted.
         """
         working_directories = self.working_directories
         self.disconnect_models()
         self.delete_configurations()
         self.configurations = [Configuration()]
+        self.configurations[0].calibration_model.detector_reset.connect(
+            self.invalidate_multi_geometry
+        )
+        self.configurations[0].calibration_model.parameters_changed.connect(
+            self.invalidate_multi_geometry
+        )
+        self._combined_cake.add_dependency(self.configurations[0].cake_changed)
         self.configuration_ind = 0
         self.overlay_model.reset()
         self.phase_model.reset()
+        self.invalidate_multi_geometry()
         self.connect_models()
         self.working_directories = working_directories
         self.configuration_removed.emit(0)
         self.configuration_selected.emit(0)
         self.img_model.img_changed.emit()
+        # without this the mask views keep showing the deleted mask
+        self.mask_changed.emit()
         self.pattern_model.pattern_changed.emit()
 
-    def delete_configurations(self):
-        """
-        Deletes all configurations currently present in the model.
-        """
+    def delete_configurations(self) -> None:
+        """Deletes all configurations currently present in the model."""
         for configuration in self.configurations:
             configuration.calibration_model.pattern_geometry.reset()
             if configuration.calibration_model.cake_geometry is not None:
@@ -529,79 +733,56 @@ class DioptasModel(object):
             del configuration.mask_model
         del self.configurations
 
-    def _setup_multiple_file_loading(self):
+    def next_image(self, pos: int | None = None) -> None:
+        """Loads the next image for each configuration if it exists.
+
+        The pos parameter is the position of the number in terms of numbers present
+        in the filename string (not string position).
         """
-        Performs tasks before multiple configuration load the next image. This is in particular to prevent multiple
-        integrations, if only one is needed.
-        """
-        if self.combine_cakes:
+        with self._combined_cake.hold():
             for configuration in self.configurations:
-                configuration.cake_changed.disconnect(self.calculate_combined_cake)
+                configuration.img_model.load_next_file(pos=pos)
 
-    def _teardown_multiple_file_loading(self):
+    def previous_image(self, pos: int | None = None) -> None:
+        """Loads the previous image for each configuration if it exists.
+
+        The pos parameter is the position of the number in terms of numbers present
+        in the filename string (not string position).
         """
-        Performs everything after all configurations have loaded a new image.
-        :return:
-        """
-        if self.combine_cakes:
+        with self._combined_cake.hold():
             for configuration in self.configurations:
-                configuration.cake_changed.connect(self.calculate_combined_cake)
-            self.calculate_combined_cake()
+                configuration.img_model.load_previous_file(pos=pos)
 
-    def next_image(self, pos=None):
-        """
-        Loads the next image for each configuration if it exists.
-        :param pos: the position of the number in terms of numbers present in the filename string (not string position).
-        """
-        self._setup_multiple_file_loading()
-        for configuration in self.configurations:
-            configuration.img_model.load_next_file(pos=pos)
-        self._teardown_multiple_file_loading()
+    def next_folder(self, mec_mode: bool = False) -> None:
+        """Loads an image in the next folder with the same filename.
 
-    def previous_image(self, pos=None):
+        This assumes that the folders are sorted with run numbers, e.g. run101, run102, etc.
+        If mec_mode is True, accounts for the MEC beamline at LCLS-SLAC where filenames
+        also include the run number.
         """
-        Loads the previous image for each configuration if it exists.
-        :param pos: the position of the number in terms of numbers present in the filename string (not string position).
-        """
-        self._setup_multiple_file_loading()
-        for configuration in self.configurations:
-            configuration.img_model.load_previous_file(pos=pos)
-        self._teardown_multiple_file_loading()
+        with self._combined_cake.hold():
+            for configuration in self.configurations:
+                configuration.img_model.load_next_folder(mec_mode=mec_mode)
 
-    def next_folder(self, mec_mode=False):
-        """
-        Loads an image in the next folder with the same filename. This assumes that the folders are sorted with run
-        numbers, e.g. run101, run102, etc.
-        :param mec_mode: flag for a special mode for the MEC beamline at LCLS-SLAC where it takes into account that also the
-                         filenames have the run number included.
-        :type mec_mode: bool
-        """
-        self._setup_multiple_file_loading()
-        for configuration in self.configurations:
-            configuration.img_model.load_next_folder(mec_mode=mec_mode)
-        self._teardown_multiple_file_loading()
+    def previous_folder(self, mec_mode: bool = False) -> None:
+        """Loads an image in the previous folder with the same filename.
 
-    def previous_folder(self, mec_mode=False):
+        This assumes that the folders are sorted with run numbers, e.g. run101, run102, etc.
+        If mec_mode is True, accounts for the MEC beamline at LCLS-SLAC where filenames
+        also include the run number.
         """
-        Loads an image in the previous folder with the same filename. This assumes that the folders are sorted with run
-        numbers, e.g. run101, run102, etc.
-        :param mec_mode: flag for a special mode for the MEC beamline at LCLS-SLAC where it takes into account that also the
-                         filenames have the run number included.
-        :type mec_mode: bool
-        """
-        self._setup_multiple_file_loading()
-        for configuration in self.configurations:
-            configuration.img_model.load_previous_folder(mec_mode=mec_mode)
-        self._teardown_multiple_file_loading()
+        with self._combined_cake.hold():
+            for configuration in self.configurations:
+                configuration.img_model.load_previous_folder(mec_mode=mec_mode)
 
-    def blockSignals(self, block=True):
+    def blockSignals(self, block: bool = True) -> None:
         for member in vars(self):
             attr = getattr(self, member)
             if isinstance(attr, Signal):
                 attr.blocked = block
 
-    def update_clicked_tth(self, tth):
+    def update_clicked_tth(self, tth: float) -> None:
         self.clicked_tth = tth
 
-    def update_clicked_azi(self, azi):
+    def update_clicked_azi(self, azi: float) -> None:
         self.clicked_azi = azi

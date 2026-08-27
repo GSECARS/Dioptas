@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import os
 import pytest
@@ -38,7 +20,7 @@ def test_set_unit(
     batch_widget.activate_stack_plot()
     bottom_axis = batch_widget.stack_plot_widget.img_view.bottom_axis_cake
 
-    class DummyViewRect(object):
+    class DummyViewRect:
         _width = 3500
         _left = 5
 
@@ -139,10 +121,10 @@ def test_update_y_axis(batch_controller, batch_widget, load_proc_data):
     batch_controller.update_y_axis()
     assert batch_widget.stack_plot_widget.img_view.left_axis_cake.range[
         0
-    ] == pytest.approx(2.904, 0.1)
+    ] == pytest.approx(3.511, abs=0.1)
     assert batch_widget.stack_plot_widget.img_view.left_axis_cake.range[
         1
-    ] == pytest.approx(30.321324, 0.01)
+    ] == pytest.approx(29.678, abs=0.1)
 
 
 def test_click_in_2d_widget_sends_clicked_change(

@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 from __future__ import annotations
 
@@ -25,6 +7,8 @@ from typing import Optional
 
 import numpy as np
 import pyqtgraph as pg
+from qtpy.QtGui import QTransform
+from scipy.ndimage import zoom
 
 
 class Normalization:
@@ -119,6 +103,20 @@ class NormalizedImageItem(pg.ImageItem):
         super().__init__(*args, **kwargs)
         self.__normalization = "linear"
         self.__rawImage = None
+        self._smooth_factor = 1
+
+    def setSmoothFactor(self, factor: int):
+        """Set the upscaling zoom factor for smoothing.
+
+        factor <= 1 means no smoothing (original data).
+        factor > 1 upscales via scipy.ndimage.zoom with cubic interpolation.
+        """
+        factor = max(1, int(factor))
+        if factor == self._smooth_factor:
+            return
+        self._smooth_factor = factor
+        if self.__rawImage is not None and self.__rawImage.size > 0:
+            self.setImage(self.__rawImage)
 
     @classmethod
     def supportedNormalizations(cls) -> tuple[str]:
@@ -170,6 +168,20 @@ class NormalizedImageItem(pg.ImageItem):
 
         self.__rawImage = image
         normalizedImage = self._getNorm().apply(image)
+
+        if self._smooth_factor > 1:
+            normalizedImage = zoom(
+                normalizedImage, self._smooth_factor, order=3
+            )
+            self.resetTransform()
+            self.setTransform(
+                QTransform.fromScale(
+                    1.0 / self._smooth_factor, 1.0 / self._smooth_factor
+                )
+            )
+        else:
+            self.resetTransform()
+
         return super().setImage(normalizedImage, *args, **kwargs)
 
     def getLevels(self):

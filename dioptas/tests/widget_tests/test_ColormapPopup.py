@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 """Test ColormapPopup widget"""
 
 import numpy as np
@@ -119,36 +101,38 @@ def testResetMode(qWidgetFactory):
     colormapPopup.setData(np.arange(101))
 
     buttons = colormapPopup._resetButtonGroup.buttons()
-    defaultButton, minmaxButton, mean3stdButton, percentileButton = buttons
+    percentileButton, minmaxButton, mean3stdButton = buttons
 
-    assert colormapPopup._resetButtonGroup.checkedButton() == defaultButton
+    # Default is Percentile with slider at 0.4%
+    assert colormapPopup._resetButtonGroup.checkedButton() == percentileButton
     mode = colormapPopup._getResetMode()
-    assert mode == "default"
+    assert mode == "0.4percentile"
 
     QTest.mouseClick(colormapPopup._autoscaleButton, QtCore.Qt.LeftButton)
     range_ = colormapPopup.getRange()
-    assert range_ == (1, 99)
+    assert range_ == (0.4, 99.6)
 
-    QTest.mouseClick(minmaxButton, QtCore.Qt.LeftButton)
+    minmaxButton.click()
     mode = colormapPopup._getResetMode()
     range_ = colormapPopup.getRange()
     assert mode == "minmax"
     assert range_ == (0, 100)
+    assert not colormapPopup._percentileSlider.isVisible()
 
-    QTest.mouseClick(percentileButton, QtCore.Qt.LeftButton)
+    # Move slider to ~1% and switch back to percentile
+    colormapPopup._percentileSlider.setValue(
+        colormapPopup._percentile_to_slider(1.0)
+    )
+    percentileButton.click()
     mode = colormapPopup._getResetMode()
+    assert "percentile" in mode
     range_ = colormapPopup.getRange()
-    assert mode == "1percentile"
-    assert range_ == (1, 99)
+    assert np.allclose(range_, (1.0, 99.0), atol=0.1)
+    assert colormapPopup._percentileSlider.isVisible()
 
-    QTest.mouseClick(mean3stdButton, QtCore.Qt.LeftButton)
+    mean3stdButton.click()
     mode = colormapPopup._getResetMode()
     range_ = colormapPopup.getRange()
     assert mode == "mean3std"
     assert range_ == (0, 100)
-
-    QTest.mouseClick(defaultButton, QtCore.Qt.LeftButton)
-    mode = colormapPopup._getResetMode()
-    range_ = colormapPopup.getRange()
-    assert mode == "default"
-    assert range_ == (1, 99)
+    assert not colormapPopup._percentileSlider.isVisible()

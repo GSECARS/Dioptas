@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 from qtpy import QtWidgets
 from pyqtgraph import GraphicsLayoutWidget
@@ -25,6 +7,7 @@ from .plot_widgets import MaskImgWidget
 
 from .CustomWidgets import NumberTextField, LabelAlignRight, SpinBoxAlignRight, HorizontalSpacerItem, \
     CheckableButton, VerticalSpacerItem, HorizontalLine
+from .MaskPluginWidget import MaskPluginWidget
 
 
 class MaskWidget(QtWidgets.QWidget):
@@ -35,7 +18,7 @@ class MaskWidget(QtWidgets.QWidget):
     """
 
     def __init__(self, *args, **kwargs):
-        super(MaskWidget, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.setObjectName('mask_widget')
         self._layout = QtWidgets.QHBoxLayout()
         self.create_display_widget()
@@ -86,6 +69,8 @@ class MaskWidget(QtWidgets.QWidget):
         self.rectangle_btn = CheckableButton('Rectangle')
         self.point_btn = CheckableButton('Point')
         self.point_size_sb = SpinBoxAlignRight()
+        self.point_size_sb.setSuffix(' px')
+        self.point_size_sb.setToolTip('Diameter of the point masking tool')
         self.polygon_btn = CheckableButton('Polygon')
         self.arc_btn = CheckableButton('Arc')
         self._geometry_layout.addWidget(self.circle_btn, 0, 0)
@@ -102,7 +87,13 @@ class MaskWidget(QtWidgets.QWidget):
         self.above_thresh_btn = QtWidgets.QPushButton('Above Thresh')
         self.below_thresh_btn = QtWidgets.QPushButton('Below Thresh')
         self.above_thresh_txt = NumberTextField('')
+        self.above_thresh_txt.setPlaceholderText('counts')
+        self.above_thresh_txt.setToolTip(
+            'Mask all pixels with intensities above this value')
         self.below_thresh_txt = NumberTextField('')
+        self.below_thresh_txt.setPlaceholderText('counts')
+        self.below_thresh_txt.setToolTip(
+            'Mask all pixels with intensities below this value')
         self._threshold_layout.addWidget(self.above_thresh_btn, 0, 0)
         self._threshold_layout.addWidget(self.above_thresh_txt, 0, 1)
         self._threshold_layout.addWidget(self.below_thresh_btn, 1, 0)
@@ -116,14 +107,10 @@ class MaskWidget(QtWidgets.QWidget):
         self.shrink_btn = QtWidgets.QPushButton('Shrink')
         self.invert_mask_btn = QtWidgets.QPushButton('Invert')
         self.clear_mask_btn = QtWidgets.QPushButton('Clear')
-        self.undo_btn = QtWidgets.QPushButton('Undo')
-        self.redo_btn = QtWidgets.QPushButton('Redo')
         self._action_layout.addWidget(self.grow_btn, 0, 0)
         self._action_layout.addWidget(self.shrink_btn, 0, 1)
         self._action_layout.addWidget(self.invert_mask_btn, 1, 0)
         self._action_layout.addWidget(self.clear_mask_btn, 1, 1)
-        self._action_layout.addWidget(self.undo_btn, 2, 0)
-        self._action_layout.addWidget(self.redo_btn, 2, 1)
         self._control_layout.addLayout(self._action_layout)
 
         self._control_layout.addWidget(HorizontalLine())
@@ -132,6 +119,20 @@ class MaskWidget(QtWidgets.QWidget):
         self._control_layout.addWidget(self.cosmic_btn)
 
         self._control_layout.addWidget(HorizontalLine())
+
+        self._plugin_header = QtWidgets.QLabel("Automatic Masking Plugins")
+        self._plugin_header.setStyleSheet(
+            "font-weight: bold; color: gray; margin-top: 4px;"
+        )
+        self._control_layout.addWidget(self._plugin_header)
+        self.plugin_widget = MaskPluginWidget()
+        self._control_layout.addWidget(self.plugin_widget)
+        self._plugin_separator = HorizontalLine()
+        self._control_layout.addWidget(self._plugin_separator)
+        # Hide plugin section until plugins are registered
+        self._plugin_header.hide()
+        self.plugin_widget.hide()
+        self._plugin_separator.hide()
 
         self._visibility_widget = QtWidgets.QWidget()
         self._visibility_layout = QtWidgets.QHBoxLayout()

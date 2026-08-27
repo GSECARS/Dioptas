@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import os
 import numpy as np
@@ -61,6 +43,27 @@ def test_is_proc(batch_controller, load_proc_data):
         unittest_data_path, "lambda", "testasapo1_1009_00002_proc.nxs"
     )
     assert batch_controller.is_proc(filename)
+
+
+def test_is_proc_closes_the_file_even_when_reading_raises(
+    batch_controller, tmp_path, monkeypatch
+):
+    """is_proc must close the file on every path.
+
+    On a normal return CPython's refcounting closes it anyway, but when an
+    exception propagates the traceback keeps the frame — and with it a bare
+    handle — alive, and every later write to that file then fails."""
+    from unittest.mock import MagicMock
+
+    handle = MagicMock()
+    handle.__enter__.return_value = handle
+    handle.__contains__.side_effect = OSError("corrupt file")
+    monkeypatch.setattr("h5py.File", MagicMock(return_value=handle))
+
+    with pytest.raises(OSError):
+        batch_controller.is_proc(os.path.join(tmp_path, "corrupt.nxs"))
+
+    handle.__exit__.assert_called()
 
 
 def test_change_3d_view(batch_controller, batch_widget):

@@ -33,21 +33,28 @@ folder = os.getcwd()
 import PyQt6 # needs to be imported before qt_material
 import qt_material
 import pyFAI
+import xraydb
 
 qt_material_path = os.path.dirname(qt_material.__file__)
 pyFAI_path = os.path.dirname(pyFAI.__file__)
+xraydb_path = os.path.dirname(xraydb.__file__)
 
 extra_datas = [
     ("dioptas/resources", "dioptas/resources"),
     (os.path.join(pyFAI_path, "resources"), "pyFAI/resources"),
     (os.path.join(qt_material_path, "fonts", "roboto"), "qt_material/fonts/roboto"),
+    (os.path.join(xraydb_path, "xraydb.sqlite"), "xraydb"),
 ]
 
 fabio_hiddenimports = collect_submodules("fabio")
 pyqtgraph_hiddenimports = collect_submodules("pyqtgraph")
 pyFAI_hiddenimports = collect_submodules("pyFAI")
+# peritheos is imported lazily inside jcpds.compute_volume — make sure the
+# static analysis doesn't miss it
+peritheos_hiddenimports = collect_submodules("peritheos")
 
-hiddenimports = fabio_hiddenimports + pyqtgraph_hiddenimports + pyFAI_hiddenimports
+hiddenimports = (fabio_hiddenimports + pyqtgraph_hiddenimports
+                 + pyFAI_hiddenimports + peritheos_hiddenimports)
 
 a = Analysis(
     ["run.py"],
@@ -57,6 +64,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
+    excludes=["PyQt5", "PySide2", "PySide6"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -119,7 +127,7 @@ exe = EXE(
     name=name,
     debug=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
     icon="dioptas/resources/icons/icon.ico",
 )
@@ -130,7 +138,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     name="Dioptas_{}_{}".format(platform, __version__),
 )
 
@@ -139,4 +147,5 @@ if _platform == "darwin":
         coll,
         name="Dioptas_{}.app".format(__version__),
         icon="dioptas/resources/icons/icon.icns",
+        bundle_identifier="com.dioptas.Dioptas",
     )

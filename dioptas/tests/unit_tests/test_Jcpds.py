@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 import os
 
 import pytest
@@ -115,3 +97,69 @@ def test_using_negative_pressures_with_zero_bulk_modulus(jcpds):
 
     jcpds.compute_d(-1, 298)
     assert jcpds.params['v'] == jcpds.params['v0']
+
+
+def test_copying_does_not_mark_as_modified(jcpds):
+    """Copying is not editing.
+
+    params is a dict subclass that flags itself when certain keys are written,
+    and Python rebuilds a dict subclass by replaying its items through
+    __setitem__ — so a plain copy used to come back claiming it had been
+    edited, asterisk on the name and all.
+    """
+    from copy import copy, deepcopy
+
+    jcpds.load_file(os.path.join(jcpds_path, 'au_Anderson.jcpds'))
+    assert not jcpds.params['modified']
+
+    for duplicate in (deepcopy(jcpds), copy(jcpds.params), deepcopy(jcpds.params)):
+        params = duplicate.params if hasattr(duplicate, 'params') else duplicate
+        assert not params['modified']
+
+    assert deepcopy(jcpds).name == 'au_Anderson'
+    assert not jcpds.params['modified']  # nor is the original touched
+
+
+def test_copying_preserves_an_existing_modified_flag(jcpds):
+    """A copy of an edited phase is still an edited phase."""
+    from copy import copy, deepcopy
+
+    jcpds.load_file(os.path.join(jcpds_path, 'au_Anderson.jcpds'))
+    jcpds.params['k0'] = 200
+    assert jcpds.params['modified']
+
+    assert deepcopy(jcpds).params['modified']
+    assert deepcopy(jcpds).name == 'au_Anderson*'
+    assert copy(jcpds.params)['modified']
+
+
+def test_deep_copy_is_independent_of_the_original(jcpds):
+    from copy import deepcopy
+
+    jcpds.load_file(os.path.join(jcpds_path, 'au_Anderson.jcpds'))
+    jcpds.add_reflection(1, 0, 0, 100, 4.0)
+    duplicate = deepcopy(jcpds)
+
+    # add_reflection is a real edit, so both carry the flag
+    assert duplicate.params['modified'] == jcpds.params['modified'] is True
+
+    jcpds.params['k0'] = 999
+    jcpds.reflections[0].d0 = 42.0
+    assert duplicate.params['k0'] != 999
+    assert duplicate.reflections[0].d0 != 42.0
+
+
+def test_load_version3_file():
+    # Dan Shim's old fixed format: bare version number, title,
+    # "symmetry_code K0 K0'", lattice line, placeholder, labels, peaks.
+    # The first line has no space, which crashed the loader for years.
+    from ...model.util.jcpds import jcpds
+    j = jcpds()
+    j.load_file(os.path.join(jcpds_path, "au_version3.jcpds"))
+    assert j.params["symmetry"] == "CUBIC"
+    assert j.params["a0"] == pytest.approx(4.0786)
+    assert j.params["k0"] == pytest.approx(166.6)
+    assert j.params["k0p0"] == pytest.approx(5.5)
+    assert len(j.reflections) == 3
+    assert j.reflections[0].d0 == pytest.approx(2.355, abs=1e-3)
+    assert j.params["comments"] == ["Gold (04-0784, Heinz and Jeanloz 1984)"]

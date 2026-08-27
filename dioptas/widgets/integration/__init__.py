@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 CLICKED_COLOR = '#00DD00'
 
@@ -43,7 +25,7 @@ class IntegrationWidget(QtWidgets.QWidget):
     """
 
     def __init__(self, *args, **kwargs):
-        super(IntegrationWidget, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
         self.setObjectName('integration_widget')
 
@@ -94,7 +76,6 @@ class IntegrationWidget(QtWidgets.QWidget):
         self.img_frame_size = QtCore.QSize(400, 500)
         self.img_frame_position = QtCore.QPoint(0, 0)
 
-        self.img_mode = 'Image'
 
     def create_shortcuts(self):
         img_control_widget = self.integration_control_widget.img_control_widget.file_widget
@@ -126,11 +107,13 @@ class IntegrationWidget(QtWidgets.QWidget):
         self.pattern_directory_txt = pattern_file_widget.directory_txt
         self.pattern_directory_btn = pattern_file_widget.directory_btn
         self.pattern_header_xy_cb = self.integration_control_widget.pattern_control_widget.xy_cb
+        self.pattern_header_xye_cb = self.integration_control_widget.pattern_control_widget.xye_cb
         self.pattern_header_chi_cb = self.integration_control_widget.pattern_control_widget.chi_cb
         self.pattern_header_dat_cb = self.integration_control_widget.pattern_control_widget.dat_cb
         self.pattern_header_fxye_cb = self.integration_control_widget.pattern_control_widget.fxye_cb
         self.pattern_headers = []
         self.pattern_headers.append(self.pattern_header_xy_cb)
+        self.pattern_headers.append(self.pattern_header_xye_cb)
         self.pattern_headers.append(self.pattern_header_chi_cb)
         self.pattern_headers.append(self.pattern_header_dat_cb)
         self.pattern_headers.append(self.pattern_header_fxye_cb)
@@ -165,10 +148,10 @@ class IntegrationWidget(QtWidgets.QWidget):
 
         corrections_control_widget = self.integration_control_widget.corrections_control_widget
         self.cbn_groupbox = corrections_control_widget.cbn_seat_gb
-        self.cbn_param_tw = corrections_control_widget.cbn_param_tw
+        self.cbn_param_form = corrections_control_widget.cbn_param_form
         self.cbn_plot_btn = corrections_control_widget.cbn_seat_plot_btn
         self.oiadac_groupbox = corrections_control_widget.oiadac_gb
-        self.oiadac_param_tw = corrections_control_widget.oiadac_param_tw
+        self.oiadac_param_form = corrections_control_widget.oiadac_param_form
         self.oiadac_plot_btn = corrections_control_widget.oiadac_plot_btn
         self.transfer_gb = corrections_control_widget.transfer_gb
         self.transfer_load_original_btn = corrections_control_widget.transfer_load_original_btn
@@ -176,6 +159,32 @@ class IntegrationWidget(QtWidgets.QWidget):
         self.transfer_plot_btn = corrections_control_widget.transfer_plot_btn
         self.transfer_original_filename_lbl = corrections_control_widget.transfer_original_filename_lbl
         self.transfer_response_filename_lbl = corrections_control_widget.transfer_response_filename_lbl
+        self.slab_groupbox = corrections_control_widget.slab_gb
+        self.slab_formula_txt = corrections_control_widget.slab_formula_txt
+        self.slab_param_form = corrections_control_widget.slab_param_form
+        self.slab_mu_lbl = corrections_control_widget.slab_mu_lbl
+        self.slab_plot_btn = corrections_control_widget.slab_plot_btn
+        self.cylinder_groupbox = corrections_control_widget.cylinder_gb
+        self.cylinder_formula_txt = corrections_control_widget.cylinder_formula_txt
+        self.cylinder_param_form = corrections_control_widget.cylinder_param_form
+        self.cylinder_container_formula_txt = corrections_control_widget.cylinder_container_formula_txt
+        self.cylinder_container_param_form = corrections_control_widget.cylinder_container_param_form
+        self.cylinder_mu_lbl = corrections_control_widget.cylinder_mu_lbl
+        self.cylinder_plot_btn = corrections_control_widget.cylinder_plot_btn
+        self.sphere_groupbox = corrections_control_widget.sphere_gb
+        self.sphere_formula_txt = corrections_control_widget.sphere_formula_txt
+        self.sphere_param_form = corrections_control_widget.sphere_param_form
+        self.sphere_mu_lbl = corrections_control_widget.sphere_mu_lbl
+        self.sphere_plot_btn = corrections_control_widget.sphere_plot_btn
+        self.plate_groupbox = corrections_control_widget.plate_gb
+        self.plate_formula_txt = corrections_control_widget.plate_formula_txt
+        self.plate_param_form = corrections_control_widget.plate_param_form
+        self.plate_mu_lbl = corrections_control_widget.plate_mu_lbl
+        self.plate_plot_btn = corrections_control_widget.plate_plot_btn
+        self.flat_field_gb = corrections_control_widget.flat_field_gb
+        self.flat_field_load_btn = corrections_control_widget.flat_field_load_btn
+        self.flat_field_filename_lbl = corrections_control_widget.flat_field_filename_lbl
+        self.flat_field_plot_btn = corrections_control_widget.flat_field_plot_btn
 
         background_control_widget = self.integration_control_widget.background_control_widget
         self.bkg_image_load_btn = background_control_widget.load_image_btn
@@ -236,6 +245,8 @@ class IntegrationWidget(QtWidgets.QWidget):
         self.qa_bkg_pattern_btn = pattern_widget.background_btn
         self.qa_bkg_pattern_inspect_btn = pattern_widget.background_inspect_btn
         self.antialias_btn = pattern_widget.antialias_btn
+        self.pattern_log_btn = pattern_widget.log_btn
+        self.pattern_sqrt_btn = pattern_widget.sqrt_btn
         self.pattern_auto_range_btn = pattern_widget.auto_range_btn
         self.pattern_widget = pattern_widget.pattern_view
 

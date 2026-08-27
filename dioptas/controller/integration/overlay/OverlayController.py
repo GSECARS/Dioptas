@@ -1,25 +1,8 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import os
 
+import numpy as np
 from qtpy import QtWidgets, QtGui
 from ....widgets.UtilityWidgets import open_files_dialog
 
@@ -27,8 +10,10 @@ from ....widgets.UtilityWidgets import open_files_dialog
 from ....widgets.integration import IntegrationWidget
 from ....model.DioptasModel import DioptasModel
 
+from ...binding import Binder
 
-class OverlayController(object):
+
+class OverlayController:
     """
     IntegrationOverlayController handles all the interaction between the Overlay controls of the integration view and
     the corresponding overlay data in the Pattern Model.
@@ -44,7 +29,17 @@ class OverlayController(object):
         self.model = dioptas_model
 
         self.overlay_lw_items = []
+        self.binder = Binder()
         self.create_signals()
+        # the waterfall separation is a view setting, bound two-way so a
+        # loaded project restores the spinbox
+        self.binder.bind_spinbox(
+            self.overlay_widget.waterfall_separation_msb,
+            lambda: self.model.view,
+            "waterfall_separation",
+            dtype=float,
+        )
+        self.binder.refresh()
 
     def create_signals(self):
         self.connect_click_function(
@@ -90,6 +85,10 @@ class OverlayController(object):
 
         self.overlay_widget.overlay_tw.horizontalHeader().sectionClicked.connect(
             self.overlay_tw_header_section_clicked
+        )
+
+        self.overlay_widget.match_intensity_requested.connect(
+            self.match_intensity
         )
 
         # creating the quick-actions signals
@@ -147,7 +146,7 @@ class OverlayController(object):
             self.model.pattern_model.background_pattern
             == self.model.overlay_model.overlays[cur_ind]
         ):
-            self.model.pattern_model.background_pattern = None
+            self.model.pattern_model.params.background_overlay_uid = ""
         self.model.overlay_model.remove_overlay(cur_ind)
 
     def overlay_removed(self, ind):
@@ -278,9 +277,14 @@ class OverlayController(object):
         overlay = self.model.overlay_model.overlays[ind]
         self.overlay_widget.set_overlay_name(ind, overlay.name)
 
+        self.overlay_widget.show_cbs[ind].blockSignals(True)
+        self.overlay_widget.show_cbs[ind].setChecked(overlay.visible)
+        self.overlay_widget.show_cbs[ind].blockSignals(False)
+
     def waterfall_btn_click_callback(self):
-        separation = self.overlay_widget.waterfall_separation_msb.value()
-        self.model.overlay_model.overlay_waterfall(separation)
+        self.model.overlay_model.overlay_waterfall(
+            self.model.view.waterfall_separation
+        )
 
     def set_as_bkg_btn_click_callback(self):
         """
@@ -295,11 +299,12 @@ class OverlayController(object):
         if not self.overlay_widget.set_as_bkg_btn.isChecked():
             ## if the overlay is not currently a background
             # it will unset the current background and redisplay
-            self.model.pattern_model.background_pattern = None
+            self.model.pattern_model.params.background_overlay_uid = ""
         else:
-            # if the overlay is currently the active background
-            self.model.pattern_model.background_pattern = (
-                self.model.overlay_model.overlays[cur_ind]
+            # if the overlay is currently the active background: the uid is
+            # the state, the model resolves it back to the overlay object
+            self.model.pattern_model.params.background_overlay_uid = (
+                self.model.overlay_model.overlays[cur_ind].params.uid
             )
             if self.overlay_widget.show_cb_is_checked(cur_ind):
                 self.overlay_widget.show_cb_set_checked(cur_ind, False)
@@ -309,9 +314,9 @@ class OverlayController(object):
 
     def set_current_pattern_as_background(self):
         self.model.overlay_model.add_overlay_pattern(self.model.pattern)
-        self.model.pattern_model.background_pattern = self.model.overlay_model.overlays[
-            -1
-        ]
+        self.model.pattern_model.params.background_overlay_uid = (
+            self.model.overlay_model.overlays[-1].params.uid
+        )
 
         self.overlay_widget.set_as_bkg_btn.setChecked(True)
         self.overlay_widget.show_cb_set_checked(-1, False)
@@ -358,3 +363,34 @@ class OverlayController(object):
         # assign the the opposite to all checkboxes
         for cb in self.overlay_widget.show_cbs:
             cb.setChecked(not current_checkbox_state)
+
+    def match_intensity(self, ind):
+        overlay = self.model.overlay_model.overlays[ind]
+        pattern_x, pattern_y = self.model.pattern.data
+
+        overlay_x = overlay._original_x
+        overlay_y = overlay._original_y
+
+        if len(overlay_x) == 0 or len(pattern_x) == 0:
+            return
+
+        # find overlapping x-range
+        x_min = max(overlay_x.min(), pattern_x.min())
+        x_max = min(overlay_x.max(), pattern_x.max())
+        if x_min >= x_max:
+            return
+
+        # interpolate overlay onto pattern x-grid within overlap
+        mask = (pattern_x >= x_min) & (pattern_x <= x_max)
+        pattern_x_overlap = pattern_x[mask]
+        pattern_y_overlap = pattern_y[mask]
+        overlay_y_interp = np.interp(pattern_x_overlap, overlay_x, overlay_y)
+
+        denom = overlay_y_interp @ overlay_y_interp
+        if denom == 0:
+            return
+
+        scale = (overlay_y_interp @ pattern_y_overlap) / denom
+
+        self.model.overlay_model.set_overlay_offset(ind, 0)
+        self.model.overlay_model.set_overlay_scaling(ind, scale)

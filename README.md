@@ -1,7 +1,13 @@
 # Dioptas
 
-A GUI program for fast analysis of powder X-ray diffraction Images. It provides the capability of calibrating,
+A GUI program for fast analysis of powder X-ray diffraction images. It provides the capability of calibrating,
 creating masks, having pattern overlays and showing phase lines.
+
+## Documentation
+
+The full user manual is hosted on Read the Docs:
+
+https://dioptas.readthedocs.io/
 
 ## Maintainer
 
@@ -9,23 +15,27 @@ Clemens Prescher (clemens.prescher@gmail.com)
 
 ## Requirements
 
-    * python 3.9+
+- Python 3.11, 3.12, or 3.13
 
-It is known to run on Windows, Mac and Linux. For optimal usage on a Windows machine it should be run with 64 bit
-python.
+Dioptas runs on 64-bit Windows, macOS, and Linux.
 
 ## Installation
 
 ### Executables
 
-Executable versions for Windows, Mac OsX and Linux (all 64bit) can be downloaded from:
+Executable versions for Windows, macOS, and Linux can be downloaded from:
 
 https://github.com/Dioptas/Dioptas/releases
 
-The executable versions are self-contained folders, which do not need any python installation.
+The executable versions are self-contained and do not need a Python installation.
 Under Windows and Linux the program can be started by running the executable (e.g. Dioptas.exe or Dioptas).
-Under MacOS X the folder will contain an app folder which needs to be right-clicked and selected "Open" to start the program.
-Accepting the security prompts is required.
+On macOS, open the `.dmg` and drag Dioptas to Applications. A `.tar.gz` archive of the application is also available.
+
+If macOS shows a warning that the app "cannot be verified", you need to remove the quarantine attribute by running the following command in the Terminal:
+
+```bash
+find Dioptas_*.app -exec xattr -c {} \;
+```
 
 ### Python Package
 
@@ -41,10 +51,9 @@ and then run Dioptas by typing:
 dioptas
 ```
 
-in the commandline.
+on the command line.
 
-We also maintain a conda-forge version of dioptas.
-You can add the conda-forge channel to your conda distribution and then install dioptas via conda should be working correctly.
+Dioptas is also available from conda-forge:
 
 ```bash
 conda config --add channels conda-forge
@@ -89,3 +98,27 @@ The packages are listed in the file `pyproject.toml`. The program can then be st
 ```bash
 python run.py
 ```
+
+## Scripting API
+
+Dioptas can also be used as a Python library for headless integration from scripts and Jupyter notebooks.
+Set up your experiment in the GUI, save a `.dio` project file, then use it in code:
+
+```python
+from dioptas.pipeline import Pipeline
+
+# Load full setup (calibration, mask, corrections, etc.) from a project file
+p = Pipeline.from_project("experiment.dio")
+
+# Override the mask if needed
+p.load_mask("new_beamstop.mask")
+
+# Integrate a single image
+pattern = p.integrate("sample_001.tiff")
+pattern.save("sample_001.xy")
+
+# Batch integrate with a glob pattern
+patterns = p.integrate_batch("data/sample_*.tif")
+```
+
+See the [scripting API documentation](docs/source/scripting_api.rst) for the full reference.

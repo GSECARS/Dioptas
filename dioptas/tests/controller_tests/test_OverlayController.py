@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 from ..utility import QtTest, click_button, click_checkbox
 import pytest
@@ -413,6 +395,26 @@ def test_move_single_overlay_one_step_down(
 
     # selected row should also move
     assert integration_widget.overlay_tw.currentRow() == 4
+
+
+def test_move_overlay_preserves_checkbox_state(
+    overlay_controller: OverlayController,
+    integration_widget: IntegrationWidget,
+    dioptas_model: DioptasModel,
+):
+    overlay_widget = integration_widget.overlay_widget
+    load_overlays(dioptas_model.overlay_model)
+
+    # uncheck overlay 3
+    overlay_widget.show_cbs[3].setChecked(False)
+    assert not dioptas_model.overlay_model.overlays[3].visible
+
+    # move overlay 3 up — the unchecked state should follow it to row 2
+    overlay_widget.select_overlay(3)
+    click_button(overlay_widget.move_up_btn)
+
+    assert not overlay_widget.show_cbs[2].isChecked()
+    assert overlay_widget.show_cbs[3].isChecked()
 
 
 def test_bulk_change_visibility_of_overlays(

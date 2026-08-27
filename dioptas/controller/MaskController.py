@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import sys
 import os
@@ -26,13 +8,17 @@ from math import sqrt
 import numpy as np
 
 from ..widgets.UtilityWidgets import open_file_dialog, save_file_dialog
+from ..widgets.MaskPluginWidget import MaskPluginSettingsDialog
 
 # imports for type hinting in PyCharm -- DO NOT DELETE
 from ..widgets.MaskWidget import MaskWidget
 from ..model.DioptasModel import DioptasModel
+from ..model.util.file_type import FileLoadingError
+
+from .binding import Binder
 
 
-class MaskController(object):
+class MaskController:
     DEFAULT_MASK_FILTER = 'Mask (*.mask)'
     FLIPUD_MASK_FILTER_PREFIX = 'Vertically flipped mask'
 
@@ -45,10 +31,12 @@ class MaskController(object):
         """
         self.widget = widget
         self.model = dioptas_model
+        self.binder = Binder(field_events=self.model.configuration_params_changed)
 
         self.state = None
         self.clicks = 0
         self.create_signals()
+        self._setup_plugins()
 
         self.rect = None
         self.circle = None
@@ -63,8 +51,10 @@ class MaskController(object):
         self.widget.polygon_btn.clicked.connect(self.activate_polygon_btn)
         self.widget.arc_btn.clicked.connect(self.activate_arc_btn)
         self.widget.point_btn.clicked.connect(self.activate_point_btn)
-        self.widget.undo_btn.clicked.connect(self.undo_btn_click)
-        self.widget.redo_btn.clicked.connect(self.redo_btn_click)
+        # undo/redo live in the sidebar (application-wide); this only has to
+        # follow the history, since a restored step can re-enable a plugin
+        # that an imprint disabled
+        self.model.history.changed.connect(self._update_plugin_checkboxes)
         self.widget.below_thresh_btn.clicked.connect(self.below_thresh_btn_click)
         self.widget.above_thresh_btn.clicked.connect(self.above_thresh_btn_click)
         self.widget.cosmic_btn.clicked.connect(self.cosmic_btn_click)
@@ -77,35 +67,128 @@ class MaskController(object):
         self.widget.add_mask_btn.clicked.connect(self.add_mask_btn_click)
         self.widget.mask_rb.clicked.connect(self.mask_rb_click)
         self.widget.unmask_rb.clicked.connect(self.unmask_rb_click)
-        self.widget.fill_rb.clicked.connect(self.fill_rb_click)
-        self.widget.transparent_rb.clicked.connect(self.transparent_rb_click)
+        self.binder.bind_radio_pair(
+            self.widget.transparent_rb,
+            self.widget.fill_rb,
+            lambda: self.model.current_configuration,
+            "transparent_mask",
+            on_changed=self._apply_mask_transparency,
+        )
 
         self.widget.point_size_sb.valueChanged.connect(self.set_point_size)
         self.widget.img_widget.mouse_moved.connect(self.show_img_mouse_position)
 
         self.widget.keyPressEvent = self.key_press_event
 
-        self.model.img_changed.connect(self.update_mask_dimension)
+        self.model.img_changed.connect(self.plot_image)
+        self.model.mask_changed.connect(self.plot_mask)
         self.model.configuration_selected.connect(self.update_gui)
 
-    def activate_model_signals(self):
-        if not self.model.img_changed.has_listener(self.update_mask_dimension):
-            self.model.img_changed.connect(self.update_mask_dimension)
-        if not self.model.configuration_selected.has_listener(self.update_gui):
-            self.model.configuration_selected.connect(self.update_gui)
+    def _setup_plugins(self):
+        """Populate plugin widget and connect signals."""
+        manager = self.model.mask_plugin_manager
+        if not manager.plugin_names:
+            return
+
+        self.widget._plugin_header.show()
+        self.widget.plugin_widget.show()
+        self.widget._plugin_separator.show()
+
+        for name in manager.plugin_names:
+            plugin = manager.get_plugin(name)
+            checkbox, settings_btn, imprint_btn = self.widget.plugin_widget.add_plugin_row(
+                name, plugin.has_settings
+            )
+            checkbox.toggled.connect(
+                lambda checked, n=name: self._on_plugin_toggled(n, checked)
+            )
+            if settings_btn is not None:
+                settings_btn.clicked.connect(
+                    lambda _, n=name: self._on_plugin_settings(n)
+                )
+            imprint_btn.clicked.connect(
+                lambda _, n=name: self._on_plugin_imprint(n)
+            )
+
+        manager.mask_changed.connect(self.plot_mask)
+
+    def _on_plugin_toggled(self, name, checked):
+        self.model.mask_plugin_manager.set_enabled(name, checked)
+        row = self.widget.plugin_widget.get_row(name)
+        if row is not None:
+            row.imprint_btn.setEnabled(checked)
+        self.plot_mask()
+
+    def _on_plugin_imprint(self, name):
+        """Bake the current plugin mask into the user-drawn mask, then disable it."""
+        self.model.mask_model.imprint_plugin_mask(name)
+        # Sync GUI with the now-disabled plugin
+        row = self.widget.plugin_widget.get_row(name)
+        if row is not None:
+            row.checkbox.blockSignals(True)
+            row.checkbox.setChecked(False)
+            row.checkbox.blockSignals(False)
+            row.imprint_btn.setEnabled(False)
+        self.plot_mask()
+
+    def _on_plugin_settings(self, name):
+        plugin = self.model.mask_plugin_manager.get_plugin(name)
+        if plugin is None:
+            return
+        schema = plugin.get_settings_schema()
+        if schema is None:
+            return
+
+        manager = self.model.mask_plugin_manager
+        old_settings = plugin.get_settings().copy()
+
+        info_text = self._get_plugin_info_text(name)
+        dialog = MaskPluginSettingsDialog(
+            name,
+            schema,
+            plugin.get_settings(),
+            plugin_description=plugin.description,
+            info_text=info_text,
+            parent=self.widget,
+        )
+        dialog.settings_changed.connect(
+            lambda settings, n=name: self._apply_plugin_settings(n, settings)
+        )
+        result = dialog.exec()
+
+        if result != dialog.DialogCode.Accepted:
+            # Restore old settings on cancel
+            self._apply_plugin_settings(name, old_settings)
+
+    def _apply_plugin_settings(self, name, settings):
+        self.model.mask_plugin_manager.update_plugin_settings(name, settings)
+        self.plot_mask()
+
+    def _get_plugin_info_text(self, name):
+        entry = self.model.mask_plugin_manager.plugins.get(name)
+        if entry is None or entry.cached_mask is None:
+            return ""
+        n_masked = int(entry.cached_mask.sum())
+        n_total = entry.cached_mask.size
+        pct = 100.0 * n_masked / n_total if n_total > 0 else 0
+        return f"Masked pixels: {n_masked:,} ({pct:.2f}%)"
 
     def activate(self):
-        self.activate_model_signals()
+        if not self.model.img_changed.has_listener(self.plot_image):
+            self.model.img_changed.connect(self.plot_image)
+        if not self.model.mask_changed.has_listener(self.plot_mask):
+            self.model.mask_changed.connect(self.plot_mask)
+        if not self.model.configuration_selected.has_listener(self.update_gui):
+            self.model.configuration_selected.connect(self.update_gui)
         self.update_gui()
 
     def deactivate(self):
-        if self.model.img_changed.has_listener(self.update_mask_dimension):
-            self.model.img_changed.disconnect(self.update_mask_dimension)
+        if self.model.img_changed.has_listener(self.plot_image):
+            self.model.img_changed.disconnect(self.plot_image)
+        if self.model.mask_changed.has_listener(self.plot_mask):
+            self.model.mask_changed.disconnect(self.plot_mask)
         if self.model.configuration_selected.has_listener(self.update_gui):
             self.model.configuration_selected.disconnect(self.update_gui)
-
-    def update_mask_dimension(self):
-        self.model.mask_model.set_dimension(self.model.img_model._img_data.shape)
 
     def uncheck_all_btn(self, except_btn=None):
         buttons = [self.widget.circle_btn, self.widget.rectangle_btn, self.widget.polygon_btn,
@@ -191,14 +274,6 @@ class MaskController(object):
         else:
             self.state = 'None'
             self.uncheck_all_btn()
-
-    def undo_btn_click(self):
-        self.model.mask_model.undo()
-        self.plot_mask()
-
-    def redo_btn_click(self):
-        self.model.mask_model.redo()
-        self.plot_mask()
 
     def plot_image(self):
         self.widget.img_widget.plot_image(self.model.img_data, False)
@@ -322,7 +397,8 @@ class MaskController(object):
         arc_points_b = self.model.mask_model.calc_arc_points_from_angles(arc_center, arc_r, -1, phi_range)
         arc_points = arc_points_a + list(reversed(arc_points_b))
 
-        self.arc.preview_arc(arc_points)
+        qt_arc_points = [QtCore.QPointF(p.x(), p.y()) for p in arc_points]
+        self.arc.preview_arc(qt_arc_points)
 
     def arc_width_preview(self, x, y):
         arc_center = self.arc.arc_center
@@ -336,7 +412,8 @@ class MaskController(object):
         arc_points_b = self.model.mask_model.calc_arc_points_from_angles(arc_center, arc_r, width, phi_range)
         arc_points = arc_points_a + list(reversed(arc_points_b))
         self.arc.arc_points = arc_points
-        self.arc.preview_arc(arc_points)
+        qt_arc_points = [QtCore.QPointF(p.x(), p.y()) for p in arc_points]
+        self.arc.preview_arc(qt_arc_points)
 
     def update_shape_preview_fill_color(self):
         try:
@@ -435,7 +512,12 @@ class MaskController(object):
         if filename != '':
             flipud = selected_filter.startswith(self.FLIPUD_MASK_FILTER_PREFIX)
             self.model.working_directories['mask'] = os.path.dirname(filename)
-            if self.model.mask_model.load_mask(filename, flipud):
+            try:
+                loaded = self.model.mask_model.load_mask(filename, flipud)
+            except FileLoadingError as e:
+                QtWidgets.QMessageBox.critical(self.widget, 'Error', str(e))
+                return
+            if loaded:
                 self.plot_mask()
             else:
                 QtWidgets.QMessageBox.critical(self.widget, 'Error',
@@ -455,7 +537,12 @@ class MaskController(object):
         if filename != '':
             flipud = selected_filter.startswith(self.FLIPUD_MASK_FILTER_PREFIX)
             self.model.working_directories['mask'] = os.path.dirname(filename)
-            if self.model.mask_model.add_mask(filename, flipud):
+            try:
+                added = self.model.mask_model.add_mask(filename, flipud)
+            except FileLoadingError as e:
+                QtWidgets.QMessageBox.critical(self.widget, 'Error', str(e))
+                return
+            if added:
                 self.plot_mask()
             else:
                 QtWidgets.QMessageBox.critical(self.widget, 'Error',
@@ -463,7 +550,9 @@ class MaskController(object):
                                                'the same shape. Mask could not be added.')
 
     def plot_mask(self):
-        self.widget.img_widget.plot_mask(self.model.mask_model.get_img())
+        self.model.current_configuration.update_plugin_existing_mask()
+        self.widget.img_widget.activate_mask()
+        self.widget.img_widget.plot_mask(self.model.mask_model.get_display_mask())
 
     def key_press_event(self, ev):
         if self.state == "point":
@@ -473,16 +562,16 @@ class MaskController(object):
                 self.widget.point_size_sb.setValue(self.widget.point_size_sb.value() - 1)
 
         if ev.modifiers() == QtCore.Qt.ControlModifier:
-            if ev.key() == 90:  # for pressing z
-                self.undo_btn_click()
-            elif ev.key() == 89:  # for pressing y
-                self.redo_btn_click()
-            elif ev.key() == 83:  # for pressing s
+            # Ctrl+Z / Ctrl+Y are application-wide shortcuts on MainController
+            # now, so they are deliberately not handled here as well.
+            # Ctrl+O and Ctrl+A used to be listed here for loading and adding
+            # a mask file, but compared ev.key (the method) against a keycode,
+            # so they never fired — in the decade since, nobody missed them.
+            # The Load Mask and Add Mask buttons are the way in; Ctrl+A in
+            # particular means "select all" everywhere else and should not be
+            # taught to mean "merge a mask file" now.
+            if ev.key() == 83:  # for pressing s
                 self.save_mask_btn_click()
-            elif ev.key == 79:  # for pressing o
-                self.load_mask_btn_click()
-            elif ev.key == 65:  # for pressing a
-                self.add_mask_btn_click()
 
     def mask_rb_click(self):
         self.model.mask_model.set_mode(True)
@@ -494,15 +583,11 @@ class MaskController(object):
         self.widget.img_widget.mask_preview_fill_color = QtGui.QColor(0, 255, 0, 150)
         self.update_shape_preview_fill_color()
 
-    def fill_rb_click(self):
-        self.model.transparent_mask = False
-        self.widget.img_widget.set_mask_color([255, 0, 0, 255])
-        self.plot_mask()
-
-    #
-    def transparent_rb_click(self):
-        self.model.transparent_mask = True
-        self.widget.img_widget.set_mask_color([255, 0, 0, 100])
+    def _apply_mask_transparency(self, transparent):
+        """Display side effect following the transparent_mask setting."""
+        self.widget.img_widget.set_mask_color(
+            [255, 0, 0, 100] if transparent else [255, 0, 0, 255]
+        )
         self.plot_mask()
 
     def show_img_mouse_position(self, x, y):
@@ -517,13 +602,19 @@ class MaskController(object):
         self.widget.pos_lbl.setText(str)
 
     def update_gui(self):
-        # transparency
-        if self.model.transparent_mask:
-            self.widget.transparent_rb.setChecked(True)
-            self.transparent_rb_click()
-        else:
-            self.widget.fill_rb.setChecked(True)
-            self.fill_rb_click()
-
-        self.plot_mask()
         self.plot_image()
+        self.binder.refresh()  # transparency radios + their display effect
+        self._update_plugin_checkboxes()
+        self.plot_mask()
+
+    def _update_plugin_checkboxes(self):
+        """Sync plugin checkbox states with the model."""
+        manager = self.model.mask_plugin_manager
+        for name in self.widget.plugin_widget.plugin_names:
+            row = self.widget.plugin_widget.get_row(name)
+            if row is not None:
+                enabled = manager.is_enabled(name)
+                row.checkbox.blockSignals(True)
+                row.checkbox.setChecked(enabled)
+                row.checkbox.blockSignals(False)
+                row.imprint_btn.setEnabled(enabled)

@@ -1,26 +1,43 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import os
 import weakref
+
 import pytest
+
+# Run the Qt tests headless by default, so test windows don't pop up and steal
+# focus while working. This matches the CI setup, which sets QT_QPA_PLATFORM to
+# offscreen for all test workflows. Set DIOPTAS_TEST_GUI=1 to watch the tests
+# run in real windows, or set QT_QPA_PLATFORM explicitly to override.
+if not os.environ.get("DIOPTAS_TEST_GUI") and "QT_QPA_PLATFORM" not in os.environ:
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
+
+_OFFSCREEN_NOISE = (
+    "This plugin does not support",
+    "QOpenGLWidget is not supported on this platform",
+    "QOpenGLWidget: Failed to create context",
+    "Populating font family aliases took",
+)
+
+
+def pytest_configure(config):
+    """Filter the Qt warnings the offscreen platform emits for unsupported calls.
+
+    The offscreen plugin warns on every raise()/propagateSizeHints()/OpenGL
+    context call, which floods the test output without indicating a problem.
+    """
+    if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+        return
+
+    import sys
+    from qtpy import QtCore
+
+    def handler(msg_type, context, message):
+        if not any(message.startswith(prefix) for prefix in _OFFSCREEN_NOISE):
+            print(message, file=sys.stderr)
+
+    QtCore.qInstallMessageHandler(handler)
 
 
 @pytest.fixture(scope="session")
@@ -179,3 +196,39 @@ def calibration_model(dioptas_model):
 @pytest.fixture
 def img_model(dioptas_model):
     return dioptas_model.img_model
+
+
+# --- Shared test data paths ---
+
+data_path = os.path.join(os.path.dirname(__file__), "data")
+
+
+@pytest.fixture(scope="session")
+def test_data_path():
+    """Path to the shared test data directory."""
+    return data_path
+
+
+# --- Calibrated model fixtures (function-scoped for isolation) ---
+
+
+@pytest.fixture
+def calibrated_model():
+    """A DioptasModel with CeO2 Pilatus1M calibration and image loaded."""
+    from dioptas.model.DioptasModel import DioptasModel
+
+    model = DioptasModel()
+    model.calibration_model.load(os.path.join(data_path, "CeO2_Pilatus1M.poni"))
+    model.img_model.load(os.path.join(data_path, "CeO2_Pilatus1M.tif"))
+    return model
+
+
+@pytest.fixture
+def calibrated_config():
+    """A Configuration with CeO2 Pilatus1M calibration and image loaded."""
+    from dioptas.model.Configuration import Configuration
+
+    config = Configuration()
+    config.calibration_model.load(os.path.join(data_path, "CeO2_Pilatus1M.poni"))
+    config.img_model.load(os.path.join(data_path, "CeO2_Pilatus1M.tif"))
+    return config

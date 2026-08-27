@@ -1,44 +1,47 @@
+from __future__ import annotations
+
 import logging
 import os
 import re
 import pathlib
+import time
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import h5py
 import numpy as np
-from qtpy import QtCore
 from PIL import Image
 
 from xypattern.auto_background import SmoothBrucknerBackground
 from xypattern import Pattern
 
+if TYPE_CHECKING:
+    from .Configuration import Configuration
+
 logger = logging.getLogger(__name__)
 
 
-class BatchModel(QtCore.QObject):
-    """
-    Class describe a model for batch integration
-    """
+class BatchModel:
+    """Class describing a model for batch integration."""
 
-    def __init__(self, configuration):
-        super(BatchModel, self).__init__()
+    def __init__(self, configuration: Configuration) -> None:
+        self.data: np.ndarray | None = None
+        self.bkg: np.ndarray | None = None
+        self.binning: np.ndarray | None = None
+        self.file_map: np.ndarray | None = None
+        self.files: np.ndarray | None = None
+        self.pos_map: np.ndarray | None = None
+        self.pos_map_all: np.ndarray | None = None
+        self.n_img: int | None = None
+        self.n_img_all: int | None = None
+        self.raw_available: bool = False
 
-        self.data = None
-        self.bkg = None
-        self.binning = None
-        self.file_map = None
-        self.files = None
-        self.pos_map = None
-        self.pos_map_all = None
-        self.n_img = None
-        self.n_img_all = None
-        self.raw_available = False
+        self.configuration: Configuration = configuration
+        self.used_mask: str | None = None
+        self.used_mask_shape: tuple[int, ...] | None = None
+        self.used_calibration: str | None = None
 
-        self.configuration = configuration
-        self.used_mask = None
-        self.used_mask_shape = None
-        self.used_calibration = None
-
-    def reset_data(self):
+    def reset_data(self) -> None:
         self.data = None
         self.bkg = None
         self.binning = None
@@ -53,15 +56,13 @@ class BatchModel(QtCore.QObject):
         self.used_calibration = None
         self.raw_available = False
 
-    def set_image_files(self, files):
-        """
-        Set internal variables with respect of given list of files.
+    def set_image_files(self, files: list[str] | None) -> None:
+        """Set internal variables with respect of given list of files.
 
         Open each file and count number of images inside. Position of each image in the file
         and total number of images are stored in internal variables.
-
-        :param files: List of file names including path
         """
+        logger.info("Setting %d image files for batch processing", len(files))
         if files is None:
             return
         pos_map = []
@@ -91,11 +92,15 @@ class BatchModel(QtCore.QObject):
         self.pos_map_all = np.array(pos_map)
         self.file_map = np.array(file_map)
 
-    def try_load_old_format(self, data_file):
+    def try_load_old_format(self, data_file: h5py.File | h5py.Group) -> None:
         self.data = data_file["data"][()]
         self.binning = data_file["binning"][()]
         self.file_map = data_file["file_map"][()]
-        self.files = data_file["files"][()].astype("U")
+        raw_files = data_file["files"][()]
+        if hasattr(raw_files, 'astype'):
+            self.files = np.array([f.decode() if isinstance(f, bytes) else str(f) for f in raw_files.flat])
+        else:
+            self.files = np.array([str(f) for f in raw_files])
         self.pos_map = data_file["pos_map"][()]
         self.n_img = self.data.shape[0]
         self.n_img_all = self.data.shape[0]
@@ -118,11 +123,9 @@ class BatchModel(QtCore.QObject):
         if "bkg" in data_file:
             self.data = data_file["bkg"][()]
 
-    def load_proc_data(self, filename):
-        """
-        Load diffraction patterns and metadata from h5 file
-
-        """
+    def load_proc_data(self, filename: str) -> None:
+        """Load diffraction patterns and metadata from h5 file."""
+        logger.info("Loading processed batch data from %s", filename)
         with h5py.File(filename, "r") as data_file:
             # ToDo To be removed
             if "processed/result" not in data_file:
@@ -138,7 +141,8 @@ class BatchModel(QtCore.QObject):
                 return
 
             self.file_map = data_file["processed/process/file_map"][()]
-            self.files = data_file["processed/process/files"][()].astype("U")
+            raw_files = data_file["processed/process/files"][()]
+            self.files = np.array([f.decode() if isinstance(f, bytes) else str(f) for f in raw_files.flat])
             self.pos_map = data_file["processed/process/pos_map"][()]
 
             if isinstance(data_file["processed/process/cal_file"][()], bytes):
@@ -167,10 +171,9 @@ class BatchModel(QtCore.QObject):
             if "bkg" in data_file["processed/process/"]:
                 self.bkg = data_file["processed/process/bkg"][()]
 
-    def save_proc_data(self, filename):
-        """
-        Save diffraction patterns to h5 file
-        """
+    def save_proc_data(self, filename: str) -> None:
+        """Save diffraction patterns to h5 file."""
+        logger.info("Saving processed batch data to %s", filename)
         if os.path.dirname(filename) != "":
             os.makedirs(os.path.dirname(filename), exist_ok=True)
         with h5py.File(filename, mode="w") as f:
@@ -209,12 +212,11 @@ class BatchModel(QtCore.QObject):
 
             nxprocess.create_dataset("pos_map", data=self.pos_map)
             nxprocess.create_dataset("file_map", data=self.file_map)
-            nxprocess.create_dataset("files", data=self.files.astype("S"))
+            dt = h5py.string_dtype()
+            nxprocess.create_dataset("files", data=list(self.files), dtype=dt)
 
-    def save_as_csv(self, filename):
-        """
-        Save diffraction patterns to 3-columns csv file
-        """
+    def save_as_csv(self, filename: str) -> None:
+        """Save diffraction patterns to 3-columns csv file."""
         if os.path.dirname(filename) != "":
             os.makedirs(os.path.dirname(filename), exist_ok=True)
         x = self.binning.repeat(self.n_img)
@@ -230,72 +232,238 @@ class BatchModel(QtCore.QObject):
             fmt="%f",
         )
 
-    def integrate_raw_data(self, start, stop, step, use_all=False, callback_fn=None):
-        """
-        Integrate images from given file
+    def integrate_raw_data(
+        self,
+        start: int,
+        stop: int,
+        step: int,
+        use_all: bool = False,
+        callback_fn: Callable[[int], bool] | None = None,
+    ) -> None:
+        """Integrate images from given file.
 
-        :param num_points: Numbers of radial bins
-        :param start: Start image index from integration
-        :param stop: Stop image index from integration
-        :param step: Step along images to integrate
-        :param use_all: Use all images. If False use only images, that were already integrated.
-        :param callback_fn: callback function which is called each iteration with the current image number as parameter,
-                            if it returns False the integration will be aborted.
+        If callback_fn returns False the integration will be aborted.
         """
-        intensity_data = []
-        binning_data = []
-        pos_map = []
-        image_counter = 0
-        current_file = ""
-
+        logger.info("Batch integrating raw data: frames %d to %d, step %d", start, stop, step)
         if self.configuration.use_mask:
             if self.configuration.mask_model.filename != "":
                 self.used_mask = self.configuration.mask_model.filename
             mask = self.configuration.mask_model.get_mask()
             self.used_mask_shape = mask.shape
 
-        self.configuration.img_model.blockSignals(True)
-        for index in range(start, stop, step):
-            if use_all:
-                file_index, pos = self.pos_map_all[index]
-            else:
-                file_index, pos = self.pos_map[index]
-            if file_index != current_file:
-                current_file = file_index
-                self.configuration.calibration_model.img_model.load(
-                    self.files[file_index]
-                )
+        cal = self.configuration.calibration_model
+        unit = self.configuration.integration_unit
+        azi_range = self.configuration.oned_azimuth_range
 
-            self.configuration.img_model.load_series_img(pos + 1)
-            self.configuration.mask_model.set_dimension(
-                self.configuration.img_model.img_data.shape
+        if cal.can_use_dioptrin_batch(unit, azi_range):
+            self._integrate_raw_data_dioptrin_batch(
+                start, stop, step, use_all, callback_fn
             )
+        else:
+            self._integrate_raw_data_pyFAI(start, stop, step, use_all, callback_fn)
 
-            binning, intensity = self.configuration.integrate_image_1d()
-            image_counter += 1
-            pos_map.append((file_index, pos))
-            intensity_data.append(intensity)
-            binning_data.append(binning)
+    def _integrate_raw_data_pyFAI(
+        self,
+        start: int,
+        stop: int,
+        step: int,
+        use_all: bool = False,
+        callback_fn: Callable[[int], bool] | None = None,
+    ) -> None:
+        intensity_data = []
+        binning_data = []
+        pos_map = []
+        image_counter = 0
+        current_file = ""
 
-            if callback_fn is not None:
-                if not callback_fn(image_counter):
-                    break
+        # Block img_changed to prevent auto-integration and GUI updates
+        self.configuration.img_model.img_changed.blocked = True
+        last_callback_time = time.monotonic()
+        try:
+            for index in range(start, stop, step):
+                if use_all:
+                    file_index, pos = self.pos_map_all[index]
+                else:
+                    file_index, pos = self.pos_map[index]
+                if file_index != current_file:
+                    current_file = file_index
+                    self.configuration.calibration_model.img_model.load(
+                        self.files[file_index]
+                    )
+                    self.configuration.mask_model.set_dimension(
+                        self.configuration.img_model.img_data.shape
+                    )
 
-        self.configuration.img_model.blockSignals(False)
+                self.configuration.img_model.load_series_img(pos + 1)
+
+                binning, intensity = self.configuration.integrate_image_1d(
+                    update_pattern_model=False
+                )
+                image_counter += 1
+                pos_map.append((file_index, pos))
+                intensity_data.append(intensity)
+                binning_data.append(binning)
+
+                now = time.monotonic()
+                if callback_fn is not None and now - last_callback_time > 0.1:
+                    last_callback_time = now
+                    if not callback_fn(image_counter):
+                        break
+        finally:
+            self.configuration.img_model.img_changed.blocked = False
 
         # deal with different x lengths due to trimmed zeros:
-        binning_lengths = [len(binning) for binning in binning_data]
+        binning_lengths = [len(b) for b in binning_data]
         binning_max_length_ind = np.argmax(binning_lengths)
         binning_max_length = binning_lengths[binning_max_length_ind]
         binning = binning_data[binning_max_length_ind]
 
-        for ind in range(len(intensity_data)):
-            intensity_data[ind] = np.append(
-                intensity_data[ind],
-                np.zeros((binning_max_length - binning_lengths[ind], 1)),
-            )
+        padded_data = np.zeros((len(intensity_data), binning_max_length))
+        for ind, intensity in enumerate(intensity_data):
+            padded_data[ind, : len(intensity)] = intensity
 
         # finish and save everything
+
+        if self.configuration.calibration_model.filename != "":
+            self.used_calibration = self.configuration.calibration_model.filename
+        self.pos_map = np.array(pos_map)
+        self.binning = np.array(binning)
+        self.data = padded_data
+        self.bkg = None
+        self.n_img = self.data.shape[0]
+
+    def _integrate_raw_data_dioptrin_batch(
+        self,
+        start: int,
+        stop: int,
+        step: int,
+        use_all: bool = False,
+        callback_fn: Callable[[int], bool] | None = None,
+    ) -> None:
+        """Load frames through ImgModel, integrate via batch1d_iter with generator."""
+        from dioptas.model.util.integration import iter_frames_indexed
+
+        cal = self.configuration.calibration_model
+        unit = self.configuration.integration_unit
+        num_points = self.configuration.integration_rad_points
+
+        if self.configuration.use_mask:
+            mask = self.configuration.mask_model.get_mask()
+        elif self.configuration.mask_model.roi is not None:
+            mask = self.configuration.mask_model.roi_mask
+        else:
+            mask = None
+
+        indices = list(range(start, stop, step))
+        source = self.pos_map_all if use_all else self.pos_map
+
+        # Configure integrator: load one image to get shape
+        first_file_index = source[indices[0]][0]
+        self.configuration.img_model.img_changed.blocked = True
+        try:
+            self.configuration.calibration_model.img_model.load(
+                self.files[first_file_index]
+            )
+            self.configuration.mask_model.set_dimension(
+                self.configuration.img_model.img_data.shape
+            )
+            img_shape = self.configuration.img_model.img_data.shape
+            num_points = cal.sync_dioptrin_for_batch(mask, unit, num_points, img_shape)
+
+            # Build pos_map for all indices
+            all_pos_map = [(source[i][0], source[i][1]) for i in indices]
+
+            intensity_data: list[np.ndarray] = []
+            pos_map: list[tuple[int, int]] = []
+            binning: np.ndarray | None = None
+            aborted = False
+
+            def frame_generator():
+                yield from iter_frames_indexed(
+                    self.configuration.img_model,
+                    self.files,
+                    source,
+                    indices,
+                    mask_model=self.configuration.mask_model,
+                    abort_check=lambda: aborted,
+                )
+
+            result_iter = cal.dioptrin_batch1d_iter(frame_generator(), num_points)
+
+            last_callback_time = time.monotonic()
+            for i, result in enumerate(result_iter):
+                if not result.is_ok():
+                    raise RuntimeError(
+                        f"Dioptrin batch integration failed: {result.error}"
+                    )
+
+                x = np.array(result.result.radial)
+                y = np.array(result.result.intensity)
+
+                if binning is None:
+                    binning = x
+                intensity_data.append(y)
+                pos_map.append(all_pos_map[i])
+
+                now = time.monotonic()
+                if callback_fn is not None and now - last_callback_time > 0.1:
+                    last_callback_time = now
+                    if not callback_fn(i + 1):
+                        aborted = True
+                        break
+        finally:
+            self.configuration.img_model.img_changed.blocked = False
+
+        self._finalize_batch_results(cal, intensity_data, pos_map, binning, unit)
+
+    def set_integration_results(self, results: dict) -> None:
+        """Apply pre-computed integration results.
+
+        Accepts both pyFAI-style results (``binning_data`` with variable-length
+        arrays) and dioptrin-style results (``binning`` with a single array).
+        """
+        intensity_data = results["intensity_data"]
+        pos_map = results["pos_map"]
+
+        if "binning_data" in results:
+            # pyFAI path: variable-length arrays, need padding
+            binning_data = results["binning_data"]
+            binning_lengths = [len(b) for b in binning_data]
+            max_len_ind = int(np.argmax(binning_lengths))
+            max_len = binning_lengths[max_len_ind]
+            binning = binning_data[max_len_ind]
+
+            padded = np.zeros((len(intensity_data), max_len))
+            for i, intensity in enumerate(intensity_data):
+                padded[i, : len(intensity)] = intensity
+            intensity_data = padded
+        else:
+            # dioptrin path: uniform-length arrays
+            binning = results["binning"]
+            intensity_data = np.array(intensity_data)
+
+        self.pos_map = np.array(pos_map)
+        self.binning = np.array(binning)
+        self.data = intensity_data
+        self.bkg = None
+        self.n_img = self.data.shape[0]
+
+    def _finalize_batch_results(
+        self,
+        cal: object,
+        intensity_data: list[np.ndarray],
+        pos_map: list[tuple[int, int]],
+        binning: np.ndarray | None,
+        unit: str,
+    ) -> None:
+        """Store batch integration results."""
+        from dioptas.model.util.integration import convert_tth_to_d
+
+        if not intensity_data:
+            return
+
+        if unit == "d_A":
+            binning = convert_tth_to_d(binning, cal.pattern_geometry.wavelength)
 
         if self.configuration.calibration_model.filename != "":
             self.used_calibration = self.configuration.calibration_model.filename
@@ -305,11 +473,12 @@ class BatchModel(QtCore.QObject):
         self.bkg = None
         self.n_img = self.data.shape[0]
 
-    def extract_background(self, parameters, callback_fn=None):
-        """
-        Subtract background calculated with respect of given parameters
-        """
-
+    def extract_background(
+        self,
+        parameters: tuple,
+        callback_fn: Callable[[int], bool] | None = None,
+    ) -> None:
+        """Subtract background calculated with respect of given parameters."""
         bkg = np.zeros(self.data.shape)
         auto_bkg = SmoothBrucknerBackground(*parameters)
         for i, y in enumerate(self.data):
@@ -319,20 +488,15 @@ class BatchModel(QtCore.QObject):
             bkg[i] = auto_bkg.extract_background(Pattern(self.binning, y))
         self.bkg = bkg
 
-    def normalize(self, range_ind=(10, 30)):
+    def normalize(self, range_ind: tuple[int, int] = (10, 30)) -> None:
         if self.data is None:
             return
         average_intensities = np.mean(self.data[:, range_ind[0] : range_ind[1]], axis=1)
         factors = average_intensities[0] / average_intensities
         self.data = (self.data.T * factors).T
 
-    def get_image_info(self, index, use_all=False):
-        """
-        Get filename and image position in the file
-
-        :param index: Index of image in the batch
-        :param use_all: Indexing with respect to all images. If False count only images, that were integrated.
-        """
+    def get_image_info(self, index: int, use_all: bool = False) -> tuple[str | None, int | None]:
+        """Get filename and image position in the file."""
         if use_all:
             if not self.raw_available:
                 return None, None
@@ -344,22 +508,15 @@ class BatchModel(QtCore.QObject):
         filename = self.files[f_index]
         return filename, pos
 
-    def load_image(self, index, use_all=False):
-        """
-        Load image in image model
-
-        :param index: Index of image in the batch
-        :param use_all: Indexing with respect to all images. If False count only images, that were integrated.
-        """
+    def load_image(self, index: int, use_all: bool = False) -> None:
+        """Load image in image model."""
         if not self.raw_available:
             return
         filename, pos = self.get_image_info(index, use_all)
         self.configuration.calibration_model.img_model.load(filename, pos)
 
-    def get_next_folder_filenames(self):
-        """
-        Loads all files from the next folder with similar file-endings.
-        """
+    def get_next_folder_filenames(self) -> list[str]:
+        """Loads all files from the next folder with similar file-endings."""
         folder_path, _ = os.path.split(self.files[0])
         next_folder_path = iterate_folder(folder_path, 1)
         files = []
@@ -370,10 +527,8 @@ class BatchModel(QtCore.QObject):
         files = sorted(files)
         return files[: self.n_img_all]
 
-    def get_previous_folder_filenames(self):
-        """
-        Loads all files from the previous folder with similar file-endings.
-        """
+    def get_previous_folder_filenames(self) -> list[str]:
+        """Loads all files from the previous folder with similar file-endings."""
         folder_path, _ = os.path.split(self.files[0])
         previous_folder_path = iterate_folder(folder_path, -1)
         files = []
@@ -385,7 +540,7 @@ class BatchModel(QtCore.QObject):
         return files[: self.n_img_all]
 
 
-def iterate_folder(folder_path, step):
+def iterate_folder(folder_path: str, step: int) -> str | None:
     pattern = re.compile(r"\d+")
     match_iterator = pattern.finditer(folder_path)
     new_directory_str = None

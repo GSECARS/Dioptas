@@ -1,27 +1,10 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import pytest
 from mock import MagicMock, patch
 import os
 
+import h5py
 import numpy as np
 
 from ...model.ImgModel import ImgModel, BackgroundDimensionWrongException
@@ -298,6 +281,46 @@ def test_loading_ESRF_hdf5_file(img_model):
     assert np.sum(img1 - img2) != 0
 
 
+def test_loading_hdf5_with_missing_external_data_shows_clear_error(tmp_path):
+    from dioptas.model.util.file_type import FileLoadingError
+
+    master_filename = tmp_path / "scan_master.h5"
+    companion_basename = "scan_data_000001.h5"
+    with h5py.File(master_filename, "w") as master_file:
+        data_group = master_file.create_group("entry/data")
+        data_group["data_000001"] = h5py.ExternalLink(
+            companion_basename, "/entry/data/data"
+        )
+
+    with pytest.raises(FileLoadingError) as exc_info:
+        ImgModel().load(str(master_filename))
+
+    message = str(exc_info.value)
+    assert "external HDF5 companion file" in message
+    assert "missing" in message
+    assert str(tmp_path / companion_basename) in message
+
+
+def test_loading_hdf5_follows_external_data_link(tmp_path):
+    master_filename = tmp_path / "scan_master.h5"
+    companion_basename = "scan_data_000001.h5"
+    companion_filename = tmp_path / companion_basename
+    image = np.arange(6, dtype=np.uint16).reshape(1, 2, 3)
+
+    with h5py.File(companion_filename, "w") as companion_file:
+        companion_file.create_dataset("entry/data/data", data=image)
+    with h5py.File(master_filename, "w") as master_file:
+        data_group = master_file.create_group("entry/data")
+        data_group["data_000001"] = h5py.ExternalLink(
+            companion_basename, "/entry/data/data"
+        )
+
+    img_model = ImgModel()
+    img_model.load(str(master_filename))
+
+    assert np.array_equal(img_model.img_data, image[0][::-1])
+
+
 def test_summing_files(img_model):
     img_model.load(os.path.join(data_path, "image_001.tif"))
     data1 = np.copy(img_model._img_data).astype(np.uint64)
@@ -328,3 +351,147 @@ def test_loading_karabo_file_without_extra_data(img_model):
         # Verify that other file types still work
         img_model.load(os.path.join(data_path, "image_001.tif"))
         assert img_model.img_data is not None
+
+
+def test_img_model_settings_delegate_to_params():
+    from dioptas.model.ImgModel import ImgModel
+
+    img_model = ImgModel()
+    emitted = []
+    img_model.img_changed.connect(lambda: emitted.append(1))
+
+    img_model.factor = 2.5
+    assert img_model.params.factor == 2.5
+    assert len(emitted) == 1  # property setter keeps its side effect
+
+    img_model.params.factor = 3.0  # direct write behaves like the property
+    assert img_model.factor == 3.0
+    assert len(emitted) == 2
+
+    img_model.file_iteration_mode = "time"
+    assert img_model.params.file_iteration_mode == "time"
+
+
+def test_transformations_are_canonical_in_params():
+    from dioptas.model.ImgModel import ImgModel
+
+    img_model = ImgModel()
+    img_model.rotate_img_p90()
+    img_model.flip_img_horizontally()
+    assert img_model.params.transformations == ["rotate_matrix_p90", "fliplr"]
+    assert img_model.get_transformations_string_list() == [
+        "rotate_matrix_p90",
+        "fliplr",
+    ]
+
+    # the callable list derives from the names
+    import numpy as np
+    from dioptas.model.util.HelperModule import rotate_matrix_p90
+
+    assert img_model.img_transformations == [rotate_matrix_p90, np.fliplr]
+
+    img_model.load_transformations_string_list(["flipud"])
+    assert img_model.params.transformations == ["flipud"]
+
+    img_model.load_transformations_string_list(["not_a_transformation"])
+    assert img_model.params.transformations == []
+
+
+def test_direct_img_params_writes_trigger_same_reactions():
+    """Uniform writes: direct params writes behave like property writes."""
+    from dioptas.model.ImgModel import ImgModel
+
+    img_model = ImgModel()
+    emitted = []
+    img_model.img_changed.connect(lambda: emitted.append(1))
+
+    img_model.params.factor = 2  # int, direct write
+    assert len(emitted) == 1
+    assert isinstance(img_model.params.factor, float)  # coerced in reaction
+
+    img_model.params.background_scaling = 3
+    assert len(emitted) == 2
+    assert isinstance(img_model.params.background_scaling, float)
+
+    img_model.params.autoprocess = True
+    assert img_model._directory_watcher._active if hasattr(
+        img_model._directory_watcher, "_active"
+    ) else True
+    img_model.params.autoprocess = False
+
+
+def test_loading_rgb_png_converts_to_grayscale(tmp_path):
+    """Color previews (e.g. beamline PNG exports) must not enter the 2D-only
+    processing chain as 3D arrays; they are averaged to grayscale instead."""
+    from PIL import Image
+
+    rgb = np.zeros((40, 50, 3), dtype=np.uint8)
+    rgb[..., 0] = 30
+    rgb[..., 1] = 60
+    rgb[..., 2] = 90
+    filename = str(tmp_path / "preview_rgb.png")
+    Image.fromarray(rgb).save(filename)
+
+    img_model = ImgModel()
+    img_model.load(filename)
+
+    assert img_model.img_data.ndim == 2
+    assert img_model.img_data.shape == (40, 50)
+    assert np.allclose(img_model.img_data, 60.0)
+
+
+def test_loading_rgba_png_ignores_alpha(tmp_path):
+    from PIL import Image
+
+    rgba = np.zeros((40, 50, 4), dtype=np.uint8)
+    rgba[..., 0] = 30
+    rgba[..., 1] = 60
+    rgba[..., 2] = 90
+    rgba[..., 3] = 255
+    filename = str(tmp_path / "preview_rgba.png")
+    Image.fromarray(rgba).save(filename)
+
+    img_model = ImgModel()
+    img_model.load(filename)
+
+    assert img_model.img_data.ndim == 2
+    assert np.allclose(img_model.img_data, 60.0)
+
+
+def test_loading_grayscale_alpha_png_uses_luminance(tmp_path):
+    from PIL import Image
+
+    la = np.zeros((40, 50, 2), dtype=np.uint8)
+    la[..., 0] = 120
+    la[..., 1] = 255
+    filename = str(tmp_path / "preview_la.png")
+    Image.fromarray(la, mode="LA").save(filename)
+
+    img_model = ImgModel()
+    img_model.load(filename)
+
+    assert img_model.img_data.ndim == 2
+    assert np.allclose(img_model.img_data, 120.0)
+
+
+def test_ensure_grayscale_refuses_unexpected_shapes():
+    from dioptas.model.util.file_type import FileLoadingError
+
+    with pytest.raises(FileLoadingError):
+        ImgModel._ensure_grayscale(np.zeros((5, 5, 7)), "strange.h5")
+
+
+def test_color_background_image_matches_grayscale_image(tmp_path):
+    """A color PNG used as background goes through the same conversion, so it
+    stays shape-compatible with a grayscale foreground of the same size."""
+    from PIL import Image
+
+    rgb = np.full((40, 50, 3), 90, dtype=np.uint8)
+    filename = str(tmp_path / "background_rgb.png")
+    Image.fromarray(rgb).save(filename)
+
+    img_model = ImgModel()
+    img_model._img_data = np.ones((40, 50))
+    img_model.load_background(filename)
+
+    assert img_model._background_data.shape == (40, 50)

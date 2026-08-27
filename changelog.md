@@ -1,3 +1,376 @@
+# 0.10.1 (15.08.2026)
+
+## Fixes
+
+- Phase temperatures can no longer be set below absolute zero. If a very high temperature or pressure lies outside the numerical domain of the selected equation of state, Dioptas now keeps the last valid phase condition and reflection positions and shows a brief tooltip instead of exposing a calculation error. Changes made with **apply to all** are atomic, and switching to an EoS reference that cannot evaluate the current conditions is likewise rolled back safely.
+
+# 0.10.0 (14.08.2026)
+
+## Highlights
+
+- **Build a map while a scan is running.** Load the first image or images, switch on **Live**, and Dioptas appends new frames as soon as they have finished writing. This also works on beamline network storage. Files from other scans in the same folder are ignored, the grid can be given its final size at any time, and existing blanks, rearrangements and excluded points are preserved.
+
+- **Find pressure standards and sample phases in the new offline EoS database.** The **DB** button in the Phase panel searches 120 bundled materials by name, alias or chemical composition. The database includes 147 publication-checked equation-of-state records, with references, reported parameter uncertainties and experimental fit ranges where available. Select a published record and load it directly as a phase; no internet connection is needed.
+
+- **Use published or custom equations of state without losing their provenance.** A material can contain several literature records, selectable from the phase table. The Phase Editor supports Birch-Murnaghan, Murnaghan, Vinet, Modified Tait, Natural Strain and Holzapfel equations, together with constant-coefficient and Mie-Grüneisen thermal models. Published records are read-only; duplicate one before changing it so edited values cannot retain the original attribution. Complete materials can be shared as `.eosmat` files.
+
+- **Export propagated counting errors.** Enable **Calculate Poisson errors** in the 1D integration options to retain an uncertainty for every integrated point. The new `.xye` output and GSAS `.fxye` output write those errors directly. Calculation is opt-in because it adds integration time; choosing an error-bearing export can enable it and reintegrate the current image for you.
+
+## Improvements
+
+- CIF imports now retain the material name, formula, space group, atom sites and original CIF reflection source. Custom EoS records can store references, reported errors, fixed parameters and fit ranges. A `.eosmat` round-trip keeps this complete material description; `.jcpds` remains available for legacy interoperability.
+
+- Version 2 and 3 JCPDS files, including the older fixed-width format still found in beamline collections, load again.
+
+- Calibrant reflections are numbered consistently on the image, cake and pattern views. The numbers follow the visible part of a zoomed view, and separate checkboxes can hide the labels or all calibrant lines.
+
+- **autoprocess** now detects finished files on network storage and waits for a file to stop growing before loading it.
+
+- File loaders recognize common wrong-file selections and explain where the file belongs without replacing the data already on screen.
+
+- Color images are converted to grayscale intensity images for display and integration. Unsupported image shapes now produce one clear error instead of repeated dialogs.
+
+- Mask-plugin settings have a **Restore Defaults** action, and the calibration validation page remembers whether pyFAI or Fit2D parameters were last selected.
+
+- The application icon has been refreshed. On Windows it now also appears correctly on the taskbar on the first run after unpacking Dioptas.
+
+## Fixes
+
+- An unsuccessful automatic calibration-ring search no longer discards peaks that were picked manually.
+
+- Re-enabling a dynamic mask after changing images now computes the mask for the current image instead of showing the previous result.
+
+- Resetting a project and switching configurations no longer leave calibrant overlays or the wrong ring number on screen.
+
+- Intensity histograms work for 8-bit images.
+
+- Publication citations in the EoS database now retain the complete author list, and symmetry-equivalent cubic reflections use the conventional `(100)` representative.
+
+# 0.9.0 (03.08.2026)
+
+## Breaking changes
+
+- **Project files (.dio) written by Dioptas 0.8.7 or earlier can no longer be opened.** The project file format was reorganised; opening an older project shows a message naming the version that can still read it, and earlier Dioptas releases remain available on PyPI and GitHub for exactly that. Images, calibrations, masks and patterns are unaffected — they live in standard formats outside the project file. On first start after upgrading, the automatically saved session from the previous version is likewise dropped once.
+
+## New Features
+
+- **Map layers.** Each window of the pattern produces one layer of the map, and its *Value* chooses what is measured: the plain sum, a background-subtracted sum, mean, max, **peak area** (with a linear background removed), **peak position** — which makes a d-spacing, and therefore strain, map — or **peak width (FWHM)**. A **?** beside the table explains exactly how each value is computed.
+
+- **Several map windows, and math between them.** Every window is drawn in the pattern plot in its own colour (click the swatch in its row to change it) and can be dragged there. *Computed layers* combine windows by name — `A/B` for a phase fraction, `(A-B)/(A+B)` for a contrast — and can reference overlays: `A - ovl(bkg_empty)` maps the difference to a reference pattern. The displayed layer is picked with the radio button beside it or the Layer box below the map.
+
+- **Repairable map grids.** The point list shows one row per grid cell, so a frame dropped by the beamline is visible and fixable: insert or remove blank cells, reorder rows by dragging or one step at a time, or leave a bad point out — it stays in the list, struck through, until it is put back. **Check filename numbering** finds missing file numbers and inserts a blank for each automatically. The Grid dialog accepts any grid size (not only exact factorizations of the point count) and adds **serpentine (snake) scans**, axis swapping and mirroring.
+
+- The detector image sits beside the map controls while there is room, and moves into the tabs when the panel becomes too narrow for both.
+
+- **Undo and redo work across the whole application**, not just the mask: Ctrl+Z / Ctrl+Shift+Z (Cmd on macOS) in every mode, with the buttons at the top of the left sidebar. Covered are settings of every kind, mask edits, calibration peak picking and refinement, loading images and patterns, overlays, phases, and the image corrections. One drag of a spinbox is one step, and undoing an image load brings the previous image and its mask back. The separate Undo buttons in mask mode and calibration are gone, as are the never-functional Ctrl+O/Ctrl+A mask shortcuts.
+
+- **Calibration is now a step-by-step wizard** — 1. Image, 2. Pick Rings, 3. Calibrate, 4. Validation. Each page shows only what its step needs, completed steps can be revisited from the stepper, and loading an existing calibration jumps straight to validation.
+
+- Picked calibration peaks can be managed in a table — reassign a group's ring, highlight it in the image, delete selected groups — instead of only clearing everything and starting over.
+
+- The validation step shows image, cake and pattern side by side with a linked 2θ marker in all three, and overlays the calibrant's (and loaded phases') reflections in every view. Parameters can be fixed to chosen values before calibrating.
+
+- Calibration parameters can be typed in directly ("Enter Manually") without a .poni file, and the wavelength can also be entered as an energy in keV.
+
+- Setup values still at their shipped defaults — distance, wavelength, pixel size, calibrant — carry an orange border until confirmed, since a silently wrong default is the easiest way to a nonsense calibration.
+
+- Calibration peaks are now saved in project files; they were previously lost on save.
+
+- Project files are considerably smaller, and saving is atomic: an interrupted or failed save can no longer damage the existing file.
+
+## Bugfixes
+
+- Undoing an image load did nothing, and a second undo could not bring the first image back; the history could then drift from what was on screen.
+
+- Undoing a picked calibration peak left the ring number advanced, so the next pick went to the wrong ring.
+
+- Undoing and redoing a phase repainted it in a different colour each time; restored phases keep their colour.
+
+- Loading a project into a session that already had phases or overlays added to them instead of replacing them, doubling them with every load.
+
+- Copying a phase marked it as modified although nothing was edited.
+
+- On macOS, drop-down boxes took an extra click before their list would stay open; the lists also open below the box now instead of covering the full screen height.
+
+- The calibration view showed the literal text "position_lbl" until the mouse first moved over the image.
+
+- After loading an existing calibration, Pick Rings showed as not started; steps a loaded calibration makes unnecessary now show as skipped, with a tooltip saying why.
+
+- Values in disabled input fields were rendered so dim they were unreadable on the dark theme.
+
+- Phase names in the pattern plot were drawn on top of the y-axis.
+
+- The batch view labelled a missing calibration or mask file "undefined"; it now says "none loaded".
+
+- The point masking tool's size and threshold fields were unlabelled numbers.
+
+- The Bkg and X tabs of the integration view were cut off mid-control at small window heights.
+
+- Empty calibration and batch views now say how to load data instead of showing a black void.
+
+- Sporadic "wrapped C/C++ object has been deleted" errors coming from the plot labels are fixed.
+
+- Updating the background region while batch data was loaded crashed.
+
+## Appearance
+
+- A consistent monochrome icon set replaces the coloured legacy icons across the overlay and phase lists, the batch toolbar, the detector panel and the mask plugin rows (which get a real settings gear, and a stamp for imprint instead of the letter "I"). Buttons that discard a whole list are red; the toggle buttons beside the pattern plot are grouped, carry tooltips, and show an amber fill when active.
+
+# 0.8.7 (29.07.2026)
+
+## New Features
+
+- the map can be undocked into its own window, which keeps working whatever mode the main window shows; this makes it usable next to the integration view, where clicking a map point loads that image and integrates it with the settings set there — with the large image, the phase lines and all the usual controls at hand. The docked state is saved with the session
+
+- while the map is undocked, the region that selects which part of the pattern it sums also appears in the integration pattern, so the map can be re-sliced without leaving that view; it converts between the displayed unit and the unit the map was integrated in, so it works in 2θ, Q and d
+
+- the map selection marker now follows whichever image is loaded, so stepping through files anywhere in Dioptas moves it, and it hides for images that are not part of the map
+
+## Improvements
+
+- images are stored in their own dtype and compressed in project files, instead of being converted to 32-bit floats: a project holding a 2048² 16-bit image drops from about 17 MB to 4.5 MB, and reloading an image now returns exactly the data that was loaded (converting to float doubled the size of 16-bit detector data and lost precision above 16.7 million counts)
+
+- the mask is stored compressed in project files (gzip level 1): a saved mask shrinks about 190x (4.2 MB to 22 KB for a 2048² detector, 18 MB to 0.12 MB for a 4M one), which also makes the session autosave far cheaper; gzip is a built-in HDF5 filter, so older Dioptas versions still read these files
+
+- the mask undo/redo history stores bit-packed snapshots instead of full byte-per-pixel arrays, cutting its memory by 8x (about 900 MB to 113 MB for a 4M-pixel detector at the 50-step depth)
+
+## Bugfixes
+
+- switching on smoothing in the map hid the position, intensity and filename information below the map plot when hovering over it, because the smoothed image is upscaled and the mouse position was read in that upscaled grid
+
+- checking whether a batch file contains processed data left the file open when reading it raised, which then blocked every later write to that file (same failure mode as the autosave handle leak)
+
+- saving the session (autosave or on close) crashed with "Object of type bool is not JSON serializable" after restoring a previous session, because loading assigned numpy booleans from the project file into the settings; on top of that, the failed save leaked its open file handle, so every following autosave failed with "unable to truncate a file which is already open" — numpy scalars now serialize, and save/load always close the project file even when they fail partway
+
+- the corrections panel layout was off after the parameter form rework: input fields stretched across the whole panel, tabs with only a few parameters spread their rows over the full height, and the plot buttons sat at the far right edge — fields now keep a compact width, rows are packed to the top, formula inputs line up with the parameter labels, and the plot buttons sit next to (or below) the values they belong to
+
+- settings stored as tuples (the mask region of interest, phase colors) came back as lists after a project round-trip, because JSON has no tuple type
+
+- adding a configuration renamed the calibration of both the new and the original configuration to "transfer" (the name of the temporary file the calibration is transferred through), which was then shown in the calibration label and saved into project files
+
+- setting an integer intensity factor (e.g. from a script) silently wrapped uint16 image pixel values around; the factor is now coerced to float
+
+- after loading a project or resetting, calibration parameter changes did not invalidate the cached multi-geometry, so combined patterns/cakes of multiple configurations could go stale
+
+- map change signals were shared between all configurations (class-level), causing cross-configuration crosstalk; they are now per-instance and the map view follows the selected configuration
+
+- the cBN seat correction GUI had crossed field wiring: the anvil and seat absorption length fields fed each other's parameters, and restoring a project scrambled the center offset and absorption length fields
+
+- the pattern axis labels and unit buttons could go stale when switching to a configuration with a different integration unit (the previous unit was shadow-copied in the controller)
+
+- the batch view's d-spacing display now inverts the x-axis like the pattern plot
+
+## Distribution
+
+- 0.8.6 never reached PyPI: the Apple-silicon wheel failed because Homebrew's OpenMP library requires a newer macOS than the wheel was tagged for, and the Intel wheel job waited 24 hours for a runner that GitHub has retired — with one wheel job failing, the publishing step was skipped without the release run drawing attention to it. The Apple-silicon wheel is now built for macOS 14 and later, the Intel wheel is built on a current runner without OpenMP (so it keeps working on older macOS, with the spot mask running serially), and a final check now fails the release run if publishing did not happen
+
+- updated pillow (12.3.0), lxml (6.1.1), pygments (2.20.0) and setuptools (83.0.0) to resolve security advisories
+
+- added psygnal (>=0.15.1) as a dependency
+
+## Internal
+
+- restoring settings from a project file no longer needs per-field code: the generic params documents are applied wholesale on top of the legacy restore, so any settings field added in future round-trips automatically
+
+- the periodic session backup now only writes when something actually changed, instead of rewriting the whole project (including image data) every ten minutes in an idle session; closing Dioptas still saves unconditionally
+
+- the remaining hand-written `update_gui` pushes (mask transparency radio buttons, the integration view's mask/transparency/autoprocess widgets and calibration label, the configuration factor field) are now declarative bindings; the binder gained number-field and radio-pair binding kinds
+
+- the automatic (smooth Bruckner) background settings — smoothing width, iterations, polynomial order and the fitted x-range — are now canonical evented state in `PatternParams` with the pattern model pushing them into the pattern computation, instead of living in spinboxes and inside xypattern's internals; project save/load no longer reaches into those internals, and the range restored from a project is no longer clamped against whichever pattern happens to be loaded at that moment
+
+- `Configuration.copy()` now copies every setting generically instead of a hand-picked subset (it silently dropped the mask usage, integration unit, cake settings and auto-integrate flags)
+- the integration window layout mode, image dock state and overlay waterfall separation moved into the evented view state and are now saved in project files; the auto-create-pattern checkbox is bound to the persisted setting, so loading a project restores it (it previously always showed unchecked)
+
+- settings writes are now uniform: side effects (re-integration, watcher activation, background recalculation, overlay pattern math) moved from property setters into params event subscriptions, so writing `params.<field>` directly behaves exactly like the property write for every writer (GUI, scripts, pipeline); the headless pipeline uses the hold() mechanism for its deliberately integration-free writes
+
+- ImgModel's settings (autoprocess, factor, background scaling/offset, file iteration mode) moved into an evented `ImgParams` dataclass following the no-state-in-models direction; the file iteration mode is now persisted in project files (previously lost on save); img params changes surface on `configuration_params_changed` with an `img.` prefix, and the background image scale/offset spinboxes bind reactively to them
+- PatternModel's settings (unit, file iteration mode) moved into an evented `PatternParams` dataclass, surfacing on `configuration_params_changed` with a `pattern.` prefix and saved generically in the project file's pattern group
+- MaskModel's settings (drawing mode, ROI) moved into an evented `MaskParams` dataclass with a `mask.` prefix on the store surface; the mask/unmask drawing mode is now persisted in project files (previously lost on save)
+- CalibrationModel's settings (start values, fit wavelength, fixed refinement values, use mask, polarization factor, supersampling, solid angle correction, distortion spline, dioptrin usage) moved into an evented `CalibrationParams` dataclass with a `calibration.` prefix; the calibration workflow settings (start values, fit/fixed flags) are now persisted in project files, while the machine-specific dioptrin settings are deliberately not restored on load; removed the dead `fit_distance` attribute (the distance checkbox acts through the fixed refinement values)
+- image transformations are now stored canonically as a name list in `ImgParams.transformations` with the callable list derived from it; MapModel's window/dimension moved into `MapParams` (`map.` prefix) and PhaseModel's same-conditions flag into `PhaseParams` (`phase.` prefix, global — forwarded without rewiring); the same-conditions flag is now persisted in project files
+- per-item display state moved into evented params: each overlay's name/color/visibility/scaling/offset lives in an `OverlayItemParams` (scaling and offset write through to the underlying pattern math), and each phase's color/visibility in a `PhaseItemParams` — replacing the parallel `phase_colors`/`phase_visible` lists, which remain as read-only views; per-item params documents are saved in each overlay/phase group of the project file
+
+- the model Signal class is now backed by psygnal, gaining batched/paused emission while keeping the existing API
+- introduced an evented parameter dataclass layer (`dioptas.model.state`): Configuration settings now live in a `ConfigurationParams` object that is saved generically into project files; the 1D azimuth range and trim-trailing-zeros settings are now persisted (they were previously lost on save)
+- pattern/cake integration and the combined cake are now derived computations (`Derived`) with a single suppression primitive (`hold()`); this replaces the auto_integrate connect/disconnect cycling, the temporary flag-toggling dances in model and controllers, and the multiple-file-loading signal rewiring
+- project files now carry an explicit `format_version` root attribute; the versioning policy for .dio files (application version vs. layout version vs. params encoding version) is documented in `dioptas/model/state/hdf5.py`, and files written by newer Dioptas versions load best-effort instead of failing
+- added a declarative widget-binding layer (`dioptas/controller/binding.py`): bindings declare model→widget rendering (with widget signals blocked automatically) and widget→model writes once, replacing hand-written update_gui methods and their blockSignals sandwiches; Options, Background, Calibration, Pattern, Batch and Correction controllers are migrated
+- the integration unit now has a single write path with a model-level `integration_unit_changed` signal; the pattern and batch views react to it instead of double-handling the same button clicks
+- correction parameters are edited in named form fields (`ParameterFormWidget`) instead of table cells addressed by row index
+- the image/cake view mode moved from a widget attribute into evented view state (`ViewParams.img_mode` on the model); the mode switch runs in reaction to state changes, and the view mode is now saved in and restored from project files
+- added a store-level settings-change surface: `DioptasModel.configuration_params_changed` emits `(field, new, old)` for every settings change of the current configuration, and widget bindings re-render individually on matching field events — settings changed from scripts or other controllers now appear in the GUI immediately
+# 0.8.6 (27.07.2026)
+
+## New Features
+
+- added Spot Mask plugin for detecting and masking single-crystal diffraction spots in powder data using per-2θ-bin median+MAD outlier statistics, with optional fast mean+std method (algorithm based on AlbertVong/XRD-Powder-Mask)
+- added geometry support to the mask plugin interface — plugins can declare `needs_geometry = True` to receive calibration parameters (2θ/azimuth arrays, beam center, wavelength, etc.)
+- mask plugins can now receive the user-drawn mask via `existing_mask` to exclude pre-masked pixels (e.g., detector gaps) from their statistics
+- added info icons next to plugin settings parameters with instant-on-hover descriptions
+- added imprint button to each plugin row that bakes the current plugin mask into the user-drawn mask and disables the plugin (full undo/redo support — undoing an imprint reverts the mask and re-enables the plugin)
+- added Ctrl/Cmd + Left/Right keyboard shortcut to load previous/next image in all modules; the existing pattern position-line shortcut in Integration mode now requires the Alt modifier (Alt + Left/Right, with Shift or Ctrl/Cmd for ×10 or fractional steps)
+- added geometry diagrams to the slab, cylinder, and plate absorption correction tabs illustrating beam direction, tilt/rotation conventions, and the coordinate system
+- correction tabs now show a bullet indicator when the corresponding correction is enabled, making active corrections visible without switching tabs
+
+## Bugfixes
+
+- fixed Save Pattern and Save Combined Pattern dialogs not remembering the last directory between saves
+- fixed plugins not recomputing when the user draws a new mask (detector gaps were ignored until next image load)
+- fixed infinite recursion when drawing masks with dynamic or geometry-aware plugins enabled
+- fixed Spot Mask bleeding across narrow detector gaps when smoothing parameters were tuned aggressively
+- fixed Spot Mask raising `UnboundLocalError` and disabling itself when smoothing was enabled and the user mask was empty
+
+## Distribution
+
+- PyPI releases now ship binary wheels for Linux, Windows, and macOS (x86_64 and arm64) on Python 3.11–3.13, so the accelerated Spot Mask C extension is available without a compiler
+- the C extension build is now optional when installing from source — `pip install dioptas` falls back to the pure NumPy implementation if no compiler is available
+
+# 0.8.5 (12.04.2026)
+
+## New Features
+
+- added mask plugin system for extensible automated masking — supports static (per-shape) and dynamic (per-image) plugins with configurable settings, discoverable via Python entry points or `~/.dioptas/plugins/masks/` directory
+- added built-in Threshold Mask plugin for masking pixels above/below configurable intensity limits
+- added built-in Cosmic Ray Mask plugin for detecting cosmic ray artifacts using local z-score statistics with iterative filtering
+- added flat field correction support for compensating pixel-to-pixel sensitivity variations
+- plugin settings dialogs show algorithm description, masked pixel count, and update the mask live as parameters are changed
+- added startup update checker that notifies users when a new Dioptas version is available on GitHub
+
+## Bugfixes
+
+- fixed mask plugin overlays not showing in Integration and Calibration views
+- fixed project save baking dynamic plugin masks into the static mask data — now only saves user-drawn mask and persists plugin enabled state and settings separately
+- fixed plugin checkbox state not updating after loading a project
+- fixed calibration peak search not using plugin masks
+- fixed xraydb.sqlite not included in PyInstaller bundle, causing all absorption corrections to fail in released executables
+
+## Distribution
+
+- added Windows installer (Inno Setup) — no admin required, installs to user AppData
+- added macOS DMG installer with drag-to-Applications layout
+- added Linux AppImage for single-file portable distribution
+
+## Documentation
+
+- added Mask Plugins documentation page with plugin authoring guide, installation methods, settings schema reference, and API reference
+
+# 0.8.4 (25.03.2026)
+
+## New Features
+
+- added headless scripting API (`dioptas.pipeline.Pipeline`) for integration from Python scripts and Jupyter notebooks — load full setup from `.dio` project files, integrate single or batch images without the GUI
+- added slab sample absorption correction with depth-integrated Busing & Levy (1957) formula — supports tilted slabs, automatic μ calculation from chemical formula via xraydb
+- added cylinder sample absorption correction with numerical integration over beam footprint (Paalman & Pings, 1962) — supports axis orientation, variable beam width (pencil beam to full illumination), and optional glass capillary container correction
+- added sphere sample absorption correction with pencil beam and finite beam modes — appropriate for synchrotron experiments with small beams on large ball samples
+- added plate sample absorption correction for flat plate samples in Debye-Scherrer geometry
+- added beam_width parameter to cylinder and sphere corrections for continuous control between pencil beam and full illumination
+- added xraydb dependency for automatic calculation of linear absorption coefficients from chemical formula and X-ray energy
+- added GUI tabs for slab, cylinder, sphere, and plate corrections in the Corrections panel with formula input, automatic μ calculation, and Plot button
+- added centralized logging system with in-memory ring buffer — recent activity log is shown in crash dialog for better bug reports; configurable via `DIOPTAS_LOG_LEVEL` and `DIOPTAS_LOG_FILE` environment variables
+- save/load all absorption corrections (slab, cylinder, sphere, plate), supersampling factor, and overlay/phase colors and visibility in `.dio` project files
+
+## Bugfixes
+
+- fixed non-ASCII (Chinese, accented, etc.) characters in file paths — batch processing and project save/load now correctly preserve Unicode filenames via UTF-8 HDF5 strings
+- fixed mask cleared when enabling correction after loading `.dio` project
+- fixed `cake_azimuth_range` comparison crash on numpy arrays when loading projects
+- fixed file format loading returning byte ordinals instead of characters in project files
+- fixed overlay visibility checkbox not updating when moving overlays up or down
+- improved error handling: replaced silent `except: pass` blocks with proper logging across the model layer, narrowed bare `except:` to specific exception types
+
+## Code Quality
+
+- added type hints to the entire model layer (23 files) — all method signatures, instance attributes, and return types annotated with Python 3.11+ syntax
+- modernized class definitions across the entire codebase (55 files) — replaced `class Foo(object):` with `class Foo:` and `super(ClassName, self)` with `super()`
+- removed Qt dependencies from the model layer
+- cleaned up docstrings: removed redundant `:type:` and `:param X: type` annotations where type hints are now in the signature
+
+## Testing
+
+- added pytest-cov for test coverage reporting in CI
+- increased model layer test coverage from 70% to 78% with 120 new unit tests
+- added 7 unit tests for Unicode file path handling
+- dropped Python 3.9/3.10 from CI matrix (unsupported since `requires-python >= 3.11`)
+- consolidated CI_frontend into single pytest invocation for faster runs
+- changed pytest default from `-sv` (noisy) to `-v --tb=short` (clean)
+
+## Documentation
+
+- rewrote all documentation pages for v0.8.3 with updated content covering Map module, batch processing, Log/Sqrt scaling, Transfer Function correction, and all new features
+- captured fresh screenshots with current dark material theme
+- added new Map module documentation page
+- added Scripting API documentation page with full reference and examples
+- added auto-generated API reference using Sphinx autodoc for Pipeline, all model classes, corrections, and utilities
+- added `.readthedocs.yaml` and switched to sphinx_rtd_theme for ReadTheDocs builds
+- added equations and references (Busing & Levy 1957, Paalman & Pings 1962) to absorption correction documentation
+
+# 0.8.3 (stable 20.03.2026)
+
+## New Features
+
+- added mask_changed signal to MaskModel, decoupling mask display updates from image updates across all modes
+- calibration peak picking now highlights peaks belonging to the currently selected ring in a different color
+- added "Clear Ring" button in calibration mode to delete all picked peaks for the current ring
+- calibration mode "use mask" checkbox now sets the per-configuration use_mask flag, keeping it in sync with integration mode
+
+## Bugfixes
+
+- fixed mask display not updating correctly when switching configurations in mask, calibration, and integration modes
+- fixed mask checkbox and transparency state not syncing when switching configurations in calibration mode
+- fixed mask disappearing when switching to mask mode due to stale image data on the widget
+- fixed threshold masking (above/below) ignoring the mask/unmask radio button selection
+- fixed mask data being destroyed when switching configurations due to unnecessary dimension reset
+- fixed MultiGeometry cache not invalidating when calibration parameters or detector shape changed
+
+## Other
+
+- added CI release workflow that creates GitHub releases with executables on tag push
+- existing build workflows now only run on branch pushes to avoid duplicate builds on tags
+
+# 0.8.2 (stable 17.03.2026)
+
+## Improvements
+
+- use pyFAI MultiGeometry for combining patterns and cakes across multiple configurations, replacing the previous stitching/interpolation approach with proper weighted averaging
+
+# 0.8.1 (stable 05.03.2026)
+
+## Bugfixes
+
+- fixed parallel bitshuffle decompression failing for HDF5 files with multi-byte dtypes (e.g. int32) — the chunk header block size was incorrectly passed in bytes instead of elements, causing map loading to crash
+
+# 0.8.0 (stable 04.03.2026)
+
+## New Features
+
+- map state (positions, integrated data) is now saved and restored in .dio project files
+- added "Reintegrate" checkbox to map widget
+- added contour line overlay to map image with smooth cubic upsampling
+- added smooth/interpolated map image toggle with adjustable zoom-based smoothing
+- added log/sqrt y-axis scaling toggles for pattern plot
+- added autoscale toggle button to map image
+- added "Match intensity" right-click context menu to overlay table for automatic overlay scaling to match the current pattern
+- overlay scale and offset step spinboxes now allow finer steps (down to 0.0001) and display only significant digits
+- improved default intensity scaling of images - based on percentile values instead of min/max to avoid outliers dominating the scaling
+- colormap popup now introduces a percentile-based slider to adjust this percentile scale
+- improved batch integration progress dialog
+- added Dioptrin as alternative integration backend for significantly faster integration performance, including parallel bitshuffle decompression for hdf5 files (this requires Dioptrin license)
+
+## Bugfixes
+
+- frame navigation in multi-frame files (HDF5, etc.) now works after loading a project
+- desktop shortcut creation now works on macOS
+- stale mask is hidden when image shape changes
+- mask is correctly fetched after loading first file in map batch integration
+- resolved pyFAI 2025.10 deprecation warnings
+- fixed image shape mismatch handling to prevent crashes
+
+## Other
+
+- relicensed from GPL-3.0 to MIT
+- removed legacy MapModel and renamed MapModel2 to MapModel
+- upgraded Pillow to fix CVE-2026-25990
+
 # 0.7.2 (stable 10.01.2026)
 
 ## Bugfixes

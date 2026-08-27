@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import os
 import gc
@@ -248,8 +230,8 @@ class ProjectSaveLoadTest(QtTest):
             saved_pyfai_params, _ = (
                 self.model.calibration_model.get_calibration_parameter()
             )
-            if "splineFile" in saved_pyfai_params:
-                del saved_pyfai_params["splineFile"]
+            for key in ("splineFile", "splinefile"):
+                saved_pyfai_params.pop(key, None)
             if "max_shape" in saved_pyfai_params:
                 del saved_pyfai_params["max_shape"]
             self.assertDictEqual(saved_pyfai_params, pyfai_params)
@@ -404,8 +386,8 @@ class ProjectSaveLoadTest(QtTest):
 
     def cbn_correction_settings(self):
         self.controller.widget.integration_widget.cbn_groupbox.setChecked(True)
-        self.controller.widget.integration_widget.cbn_param_tw.cellWidget(0, 1).setText(
-            "1.9"
+        self.controller.widget.integration_widget.cbn_param_form.set_value(
+            "anvil_thickness", 1.9
         )
         self.controller.integration_controller.correction_controller.cbn_groupbox_changed()
 
@@ -429,12 +411,12 @@ class ProjectSaveLoadTest(QtTest):
 
     def oiadac_correction_settings(self):
         self.controller.widget.integration_widget.oiadac_groupbox.setChecked(True)
-        self.controller.widget.integration_widget.oiadac_param_tw.cellWidget(
-            0, 1
-        ).setText("30")
-        self.controller.widget.integration_widget.oiadac_param_tw.cellWidget(
-            1, 1
-        ).setText("450")
+        self.controller.widget.integration_widget.oiadac_param_form.set_value(
+            "detector_thickness", 30
+        )
+        self.controller.widget.integration_widget.oiadac_param_form.set_value(
+            "detector_absorption_length", 450
+        )
         self.controller.integration_controller.correction_controller.oiadac_groupbox_changed()
 
     ####################################################################################################################
@@ -794,3 +776,137 @@ class ProjectSaveLoadTest(QtTest):
             os.path.join(data_path, "CeO2_Pilatus1M.poni")
         )
         self.model.calibration_model.polarization_factor = -0.1
+
+    ####################################################################################################################
+    def test_supersampling_factor(self):
+        self.save_and_load_configuration(
+            self.supersampling_settings,
+            intermediate_function=self.disable_calibration_check,
+        )
+        self.assertEqual(
+            self.model.calibration_model.supersampling_factor, 2
+        )
+
+    def supersampling_settings(self):
+        self.model.calibration_model.set_supersampling(2)
+
+    ####################################################################################################################
+    def test_overlay_color_and_visibility(self):
+        self.save_and_load_configuration(self.overlay_color_visibility_settings)
+        self.assertEqual(self.model.overlay_model.overlays[0].color, "#ff0000")
+        self.assertFalse(self.model.overlay_model.overlays[0].visible)
+        self.assertEqual(self.model.overlay_model.overlays[1].color, "#00ff00")
+        self.assertTrue(self.model.overlay_model.overlays[1].visible)
+
+    def overlay_color_visibility_settings(self):
+        self.controller.integration_controller.widget.qa_set_as_overlay_btn.click()
+        self.controller.integration_controller.widget.qa_set_as_overlay_btn.click()
+        self.model.overlay_model.set_overlay_color(0, "#ff0000")
+        self.model.overlay_model.set_overlay_visible(0, False)
+        self.model.overlay_model.set_overlay_color(1, "#00ff00")
+        self.model.overlay_model.set_overlay_visible(1, True)
+
+    ####################################################################################################################
+    def test_phase_color_and_visibility(self):
+        self.save_and_load_configuration(self.phase_color_visibility_settings)
+        np.testing.assert_array_almost_equal(
+            self.model.phase_model.phase_colors[0], [255, 0, 0]
+        )
+        self.assertFalse(self.model.phase_model.phase_visible[0])
+
+    def phase_color_visibility_settings(self):
+        self.load_phase("ar.jcpds")
+        self.model.phase_model.set_color(0, np.array([255, 0, 0]))
+        self.model.phase_model.set_phase_visible(0, False)
+
+    ####################################################################################################################
+    def test_with_slab_correction(self):
+        self.save_and_load_configuration(
+            self.slab_correction_settings, mock_1d_integration=False
+        )
+        correction = self.model.img_model.img_corrections.corrections["slab"]
+        self.assertAlmostEqual(correction._thickness, 0.5)
+        self.assertAlmostEqual(correction._absorption_coefficient, 2.0)
+
+    def slab_correction_settings(self):
+        from ...model.util.ImgCorrection import SlabAbsorptionCorrection
+
+        tth_array = 180.0 / np.pi * self.model.calibration_model.tth_array
+        azi_array = 180.0 / np.pi * self.model.calibration_model.azi_array
+        correction = SlabAbsorptionCorrection(
+            tth_array=tth_array,
+            azi_array=azi_array,
+            thickness=0.5,
+            absorption_coefficient=2.0,
+        )
+        correction.update()
+        self.model.img_model.add_img_correction(correction, "slab")
+
+    ####################################################################################################################
+    def test_with_cylinder_correction(self):
+        self.save_and_load_configuration(
+            self.cylinder_correction_settings, mock_1d_integration=False
+        )
+        correction = self.model.img_model.img_corrections.corrections["cylinder"]
+        self.assertAlmostEqual(correction._radius, 0.3)
+        self.assertAlmostEqual(correction._absorption_coefficient, 1.5)
+
+    def cylinder_correction_settings(self):
+        from ...model.util.ImgCorrection import CylinderAbsorptionCorrection
+
+        tth_array = 180.0 / np.pi * self.model.calibration_model.tth_array
+        azi_array = 180.0 / np.pi * self.model.calibration_model.azi_array
+        correction = CylinderAbsorptionCorrection(
+            tth_array=tth_array,
+            azi_array=azi_array,
+            radius=0.3,
+            absorption_coefficient=1.5,
+        )
+        correction.update()
+        self.model.img_model.add_img_correction(correction, "cylinder")
+
+    ####################################################################################################################
+    def test_with_sphere_correction(self):
+        self.save_and_load_configuration(
+            self.sphere_correction_settings, mock_1d_integration=False
+        )
+        correction = self.model.img_model.img_corrections.corrections["sphere"]
+        self.assertAlmostEqual(correction._radius, 0.2)
+        self.assertAlmostEqual(correction._absorption_coefficient, 3.0)
+
+    def sphere_correction_settings(self):
+        from ...model.util.ImgCorrection import SphereAbsorptionCorrection
+
+        tth_array = 180.0 / np.pi * self.model.calibration_model.tth_array
+        azi_array = 180.0 / np.pi * self.model.calibration_model.azi_array
+        correction = SphereAbsorptionCorrection(
+            tth_array=tth_array,
+            azi_array=azi_array,
+            radius=0.2,
+            absorption_coefficient=3.0,
+        )
+        correction.update()
+        self.model.img_model.add_img_correction(correction, "sphere")
+
+    ####################################################################################################################
+    def test_with_plate_correction(self):
+        self.save_and_load_configuration(
+            self.plate_correction_settings, mock_1d_integration=False
+        )
+        correction = self.model.img_model.img_corrections.corrections["plate"]
+        self.assertAlmostEqual(correction._thickness, 1.5)
+        self.assertAlmostEqual(correction._absorption_coefficient, 0.8)
+
+    def plate_correction_settings(self):
+        from ...model.util.ImgCorrection import PlateAbsorptionCorrection
+
+        tth_array = 180.0 / np.pi * self.model.calibration_model.tth_array
+        azi_array = 180.0 / np.pi * self.model.calibration_model.azi_array
+        correction = PlateAbsorptionCorrection(
+            tth_array=tth_array,
+            azi_array=azi_array,
+            thickness=1.5,
+            absorption_coefficient=0.8,
+        )
+        correction.update()
+        self.model.img_model.add_img_correction(correction, "plate")

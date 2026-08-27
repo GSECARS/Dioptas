@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import pyqtgraph as pg
 from pyqtgraph import ViewBox
@@ -37,9 +19,10 @@ class ImgWidget(QtCore.QObject):
     mouse_left_clicked = QtCore.Signal(float, float)
     mouse_left_double_clicked = QtCore.Signal(float, float)
 
-    def __init__(self, pg_layout, orientation="vertical"):
-        super(ImgWidget, self).__init__()
+    def __init__(self, pg_layout, orientation="vertical", padding=0.01):
+        super().__init__()
         self.pg_layout = pg_layout
+        self._padding = padding
 
         self.create_graphics()
         self.set_orientation(orientation)
@@ -53,6 +36,7 @@ class ImgWidget(QtCore.QObject):
 
     def create_graphics(self):
         self.img_view_box = self.pg_layout.addViewBox(row=1, col=1)  # type: ViewBox
+        self.img_view_box.setDefaultPadding(self._padding)
 
         self.data_img_item = NormalizedImageItem()
         self.img_view_box.addItem(self.data_img_item)
@@ -157,6 +141,13 @@ class ImgWidget(QtCore.QObject):
             return
         self.img_histogram_LUT_vertical.setLevels(*colormap_range)
         self.img_histogram_LUT_horizontal.setLevels(*colormap_range)
+        if colormap_range[0] <= 0:
+            # The histogram works in log space and clamps levels <= 0 to 1,
+            # which detector images (never negative) do not notice. Map
+            # layers can be negative throughout — a difference, a contrast —
+            # and came out as a blank map, so their levels go onto the image
+            # directly.
+            self.data_img_item.setLevels(list(colormap_range))
 
     def add_scatter_data(self, x, y):
         self.img_scatter_plot_item.addPoints(x=y, y=x)
@@ -178,7 +169,10 @@ class ImgWidget(QtCore.QObject):
         self.img_scatter_plot_item.show()
 
     def mouseMoved(self, pos):
-        pos = self.data_img_item.mapFromScene(pos)
+        # mapped through the view box and not the image item: a smoothed image
+        # item carries an upscaling transform, which would scale the reported
+        # data coordinates along with it
+        pos = self.img_view_box.mapSceneToView(pos)
         self.mouse_moved.emit(pos.x(), pos.y())
 
     def modify_mouse_behavior(self):
@@ -331,8 +325,8 @@ class ImgWidget(QtCore.QObject):
 
 
 class CalibrationCakeWidget(ImgWidget):
-    def __init__(self, pg_layout, orientation="vertical"):
-        super(CalibrationCakeWidget, self).__init__(pg_layout, orientation)
+    def __init__(self, pg_layout, orientation="vertical", padding=0.01):
+        super().__init__(pg_layout, orientation, padding)
         self.img_view_box.setAspectLocked(False)
         self.create_vertical_line()
         self.mouse_left_clicked.connect(self.set_vertical_line_pos)
@@ -357,10 +351,40 @@ class CalibrationCakeWidget(ImgWidget):
     def set_vertical_line_pos(self, x, _):
         self.vertical_line.setValue(x)
 
+    def set_phase_lines(self, positions_and_colors):
+        """Draws one vertical line per phase reflection.
+
+        :param positions_and_colors: iterable of (column position,
+            rgba color, label) — label is a string drawn at the top of the
+            line or None for no label
+        """
+        self.clear_phase_lines()
+        for ind, (position, color, label) in enumerate(positions_and_colors):
+            line = pg.InfiniteLine(angle=90, pen=pg.mkPen(color=color, width=1.6))
+            line.setValue(position)
+            if label is not None:
+                # alternating heights so labels of closely spaced lines
+                # don't overlap
+                pg.InfLineLabel(
+                    line,
+                    text=label,
+                    position=0.97 if ind % 2 else 0.93,
+                    color=color,
+                    movable=False,
+                    fill=pg.mkBrush(0, 0, 0, 150),
+                )
+            self.img_view_box.addItem(line)
+            self._phase_line_items.append(line)
+
+    def clear_phase_lines(self):
+        for line in getattr(self, '_phase_line_items', []):
+            self.img_view_box.removeItem(line)
+        self._phase_line_items = []
+
 
 class MaskImgWidget(ImgWidget):
-    def __init__(self, pg_layout, orientation="vertical"):
-        super(MaskImgWidget, self).__init__(pg_layout, orientation)
+    def __init__(self, pg_layout, orientation="vertical", padding=0.01):
+        super().__init__(pg_layout, orientation, padding)
         self.mask_img_item = pg.ImageItem()
         self.img_view_box.addItem(self.mask_img_item)
         self.img_view_box.setAspectLocked(True)
@@ -376,6 +400,9 @@ class MaskImgWidget(ImgWidget):
             self.img_view_box.removeItem(self.mask_img_item)
 
     def plot_mask(self, mask_data):
+        if self.img_data is not None and mask_data.shape != self.img_data.shape:
+            self.deactivate_mask()
+            return
         self.mask_data = np.int16(mask_data)
         self.mask_img_item.setImage(
             self.mask_data.T, autoRange=True, autoHistogramRange=True, autoLevels=True
@@ -419,8 +446,8 @@ class MaskImgWidget(ImgWidget):
 
 
 class IntegrationImgWidget(MaskImgWidget):
-    def __init__(self, pg_layout, orientation="vertical"):
-        super(IntegrationImgWidget, self).__init__(pg_layout, orientation)
+    def __init__(self, pg_layout, orientation="vertical", padding=0.01):
+        super().__init__(pg_layout, orientation, padding)
         self.create_circle_plot_items()
         self.create_mouse_click_item()
         self.create_roi_item()
@@ -476,6 +503,81 @@ class IntegrationImgWidget(MaskImgWidget):
             if plot_item in self.img_view_box.addedItems:
                 self.img_view_box.removeItem(plot_item)
 
+    #: successive ring labels sit at golden-ratio-spaced fractions along
+    #: the visible part of their ring, so neighboring rings' labels never
+    #: stack on top of each other at any zoom level
+    _RING_LABEL_FRACTION_STEP = 0.381966
+
+    def set_phase_rings(self, segments, labels=()):
+        """Draws iso-2θ contour segments of phase reflections onto the image.
+
+        :param segments: iterable of (x array, y array, rgba color) — one
+            entry per contour segment, already in image pixel coordinates
+        :param labels: iterable of (x array, y array, text, rgba color) —
+            the candidate anchor points of one ring; the text is placed on
+            whichever part of the ring is currently in view
+        """
+        self.clear_phase_rings()
+        for x, y, color in segments:
+            item = pg.PlotDataItem(x=x, y=y, pen=pg.mkPen(color=color, width=1.6))
+            self.img_view_box.addItem(item)
+            self._phase_ring_items.append(item)
+        for x, y, text, color in labels:
+            item = pg.TextItem(
+                text,
+                color=color,
+                anchor=(0.5, 0.5),
+                fill=pg.mkBrush(0, 0, 0, 150),
+            )
+            self.img_view_box.addItem(item)
+            self._phase_ring_label_items.append(item)
+            self._phase_ring_label_points.append((np.asarray(x), np.asarray(y)))
+        if not getattr(self, '_phase_ring_labels_connected', False):
+            self.img_view_box.sigRangeChanged.connect(
+                self.update_phase_ring_label_positions
+            )
+            self._phase_ring_labels_connected = True
+        self.update_phase_ring_label_positions()
+
+    def update_phase_ring_label_positions(self, *_):
+        """Re-anchors each ring number to the part of its ring in view.
+
+        Runs on every zoom or pan, so a ring crossing the current view
+        always carries its number inside the view; rings entirely outside
+        have their labels hidden.
+        """
+        label_points = getattr(self, '_phase_ring_label_points', [])
+        if not label_points:
+            return
+        (x_min, x_max), (y_min, y_max) = self.img_view_box.viewRange()
+        # inset so labels don't sit half outside the view edge
+        x_margin = 0.04 * (x_max - x_min)
+        y_margin = 0.04 * (y_max - y_min)
+        x_min, x_max = x_min + x_margin, x_max - x_margin
+        y_min, y_max = y_min + y_margin, y_max - y_margin
+        for ind, (item, (x, y)) in enumerate(
+            zip(self._phase_ring_label_items, label_points)
+        ):
+            visible = np.flatnonzero(
+                (x > x_min) & (x < x_max) & (y > y_min) & (y < y_max)
+            )
+            if len(visible) == 0:
+                item.setVisible(False)
+                continue
+            item.setVisible(True)
+            fraction = (ind * self._RING_LABEL_FRACTION_STEP) % 1
+            anchor = visible[int(fraction * (len(visible) - 1))]
+            item.setPos(x[anchor], y[anchor])
+
+    def clear_phase_rings(self):
+        for item in getattr(self, '_phase_ring_items', []):
+            self.img_view_box.removeItem(item)
+        self._phase_ring_items = []
+        for item in getattr(self, '_phase_ring_label_items', []):
+            self.img_view_box.removeItem(item)
+        self._phase_ring_label_items = []
+        self._phase_ring_label_points = []
+
     def create_roi_item(self):
         self.roi = MyROI([20, 20], [500, 500], pen=pg.mkPen(color=(0, 255, 0), size=2))
         self.roi.handlePen = QtGui.QPen(QtGui.QColor(0, 255, 0))
@@ -504,8 +606,8 @@ class IntegrationImgWidget(MaskImgWidget):
 
 
 class IntegrationCakeWidget(CalibrationCakeWidget):
-    def __init__(self, pg_layout, orientation="vertical"):
-        super(IntegrationCakeWidget, self).__init__(pg_layout, orientation)
+    def __init__(self, pg_layout, orientation="vertical", padding=0.01):
+        super().__init__(pg_layout, orientation, padding)
         self.img_view_box.setAspectLocked(False)
         self.create_mouse_click_item()
         self.add_cake_axes()
@@ -611,8 +713,8 @@ class IntegrationBatchWidget(IntegrationCakeWidget):
 
     """
 
-    def __init__(self, pg_layout, orientation="vertical"):
-        super(IntegrationBatchWidget, self).__init__(pg_layout, orientation)
+    def __init__(self, pg_layout, orientation="vertical", padding=0.01):
+        super().__init__(pg_layout, orientation, padding)
         self.create_horizontal_line()
         self.mouse_left_clicked.connect(self.set_horizontal_line_pos)
         self.linear_region_item = ModifiedLinearRegionItem(
@@ -703,7 +805,7 @@ class IntegrationBatchWidget(IntegrationCakeWidget):
         self.pg_layout.addItem(self.left_axis_cake, 1, 0)
 
 
-class CakePhasePlot(object):
+class CakePhasePlot:
     def __init__(self, plot_item, positions, intensities, color):
         self.plot_item = plot_item
         self.visible = True
@@ -729,9 +831,10 @@ class CakePhasePlot(object):
     def add_line(self):
         self.line_items.append(pg.InfiniteLine(angle=90))
         self.line_visible.append(True)
-        self.plot_item.blockSignals(True)
-        self.plot_item.addItem(self.line_items[-1])
-        self.plot_item.blockSignals(False)
+        if self.visible:
+            self.plot_item.blockSignals(True)
+            self.plot_item.addItem(self.line_items[-1])
+            self.plot_item.blockSignals(False)
 
     def delete_line(self, ind=-1):
         if self.line_items[ind].scene() == self.plot_item.scene():
@@ -752,6 +855,8 @@ class CakePhasePlot(object):
         """
         self.positions = positions
         self.intensities = intensities
+        while len(self.line_items) < len(positions):
+            self.add_line()
         self.update_visibilities()
 
         for ind, intensity in enumerate(intensities):
@@ -945,7 +1050,7 @@ class MyRectangle(QtWidgets.QGraphicsRectItem):
 
 class MyROI(pg.ROI):
     def __init__(self, pos, size, pen, img_shape=(2048, 2048)):
-        super(MyROI, self).__init__(pos, size, pen=pen)
+        super().__init__(pos, size, pen=pen)
         self.img_shape = img_shape
         self.base_mask = np.ones(img_shape)
         self.roi_mask = np.copy(self.base_mask)
@@ -975,7 +1080,7 @@ class MyROI(pg.ROI):
         self.setSize(size)
 
 
-class RoiShade(object):
+class RoiShade:
     def __init__(self, view_box, roi, img_shape=(2048, 2048)):
         self.view_box = view_box
         self.img_shape = img_shape

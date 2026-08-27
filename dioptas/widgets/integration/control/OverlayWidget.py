@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 from functools import partial
 import os
@@ -34,7 +16,8 @@ from ...CustomWidgets import (
     DoubleMultiplySpinBoxAlignRight,
     HorizontalLine,
 )
-from ...CustomWidgets import NoRectDelegate
+from ...CustomWidgets import NoRectDelegate, render_icon, DANGER_COLOR, \
+    set_icon_button_hover_color
 from .... import icons_path
 
 
@@ -44,9 +27,10 @@ class OverlayWidget(QtWidgets.QWidget):
     name_changed = QtCore.Signal(int, str)
     scale_sb_value_changed = QtCore.Signal(int, float)
     offset_sb_value_changed = QtCore.Signal(int, float)
+    match_intensity_requested = QtCore.Signal(int)
 
     def __init__(self):
-        super(OverlayWidget, self).__init__()
+        super().__init__()
 
         self._layout = QtWidgets.QHBoxLayout()
         self._layout.setContentsMargins(5, 5, 5, 5)
@@ -147,6 +131,10 @@ class OverlayWidget(QtWidgets.QWidget):
         self.overlay_tw.setColumnWidth(1, 25)
         self.overlay_tw.cellChanged.connect(self.label_editingFinished)
         self.overlay_tw.setItemDelegate(NoRectDelegate())
+        self.overlay_tw.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.overlay_tw.customContextMenuRequested.connect(
+            self._show_overlay_context_menu
+        )
 
         self._layout.addWidget(self.overlay_tw, 10)
         self._layout.addWidget(self.parameter_widget, 0)
@@ -175,10 +163,11 @@ class OverlayWidget(QtWidgets.QWidget):
 
     def style_widgets(self):
         icon_size = QtCore.QSize(17, 17)
-        self.clear_btn.setIcon(QtGui.QIcon(os.path.join(icons_path, "reset_dark.ico")))
+        self.clear_btn.setIcon(render_icon("reset.svg", color=DANGER_COLOR))
+        set_icon_button_hover_color(self.clear_btn, DANGER_COLOR)
         self.clear_btn.setIconSize(icon_size)
 
-        self.add_btn.setIcon(QtGui.QIcon(os.path.join(icons_path, "open.ico")))
+        self.add_btn.setIcon(render_icon("open.svg"))
         self.add_btn.setIconSize(icon_size)
 
         self.delete_btn.setIcon(QtGui.QIcon(os.path.join(icons_path, "delete.png")))
@@ -209,11 +198,11 @@ class OverlayWidget(QtWidgets.QWidget):
         self.waterfall_separation_msb.setFixedWidth(step_txt_width)
 
         self.scale_step_msb.setMaximum(10.0)
-        self.scale_step_msb.setMinimum(0.01)
+        self.scale_step_msb.setMinimum(0.0001)
         self.scale_step_msb.setValue(0.01)
 
         self.offset_step_msb.setMaximum(100000.0)
-        self.offset_step_msb.setMinimum(0.01)
+        self.offset_step_msb.setMinimum(0.0001)
         self.offset_step_msb.setValue(100.0)
 
         self.waterfall_separation_msb.setMaximum(100000.0)
@@ -354,3 +343,13 @@ class OverlayWidget(QtWidgets.QWidget):
         self.offset_sb_value_changed.emit(
             self.offset_sbs.index(offset_sb), offset_sb.value()
         )
+
+    def _show_overlay_context_menu(self, pos):
+        row = self.overlay_tw.rowAt(pos.y())
+        if row < 0:
+            return
+        menu = QtWidgets.QMenu(self)
+        match_action = menu.addAction("Match intensity")
+        action = menu.exec_(self.overlay_tw.viewport().mapToGlobal(pos))
+        if action == match_action:
+            self.match_intensity_requested.emit(row)

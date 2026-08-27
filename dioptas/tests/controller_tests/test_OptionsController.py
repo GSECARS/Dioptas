@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 from ..utility import QtTest
 import os
@@ -72,5 +54,40 @@ class OptionsControllerTest(QtTest):
         enter_value_into_text_field(self.options_widget.cake_azimuth_max_txt, 200)
         self.assertEqual(self.model.current_configuration.cake_azimuth_range[1], 200)
 
+    def test_toggle_poisson_error_calculation(self):
+        self.assertFalse(self.model.current_configuration.calculate_poisson_errors)
+        click_button(self.options_widget.calculate_poisson_errors_cb)
+        self.assertTrue(self.model.current_configuration.calculate_poisson_errors)
+
+    def test_disabling_poisson_errors_disables_error_autosave_formats(self):
+        configuration = self.model.current_configuration
+        configuration.calculate_poisson_errors = True
+        self.widget.pattern_header_xye_cb.setChecked(True)
+        self.widget.pattern_header_fxye_cb.setChecked(True)
+        configuration.integrated_patterns_file_formats = [".xy", ".xye", ".fxye"]
+
+        click_button(self.options_widget.calculate_poisson_errors_cb)
+
+        self.assertFalse(self.widget.pattern_header_xye_cb.isChecked())
+        self.assertFalse(self.widget.pattern_header_fxye_cb.isChecked())
+        self.assertEqual(configuration.integrated_patterns_file_formats, [".xy"])
 
 
+
+
+    def test_direct_params_write_updates_widgets(self):
+        """Writing the params directly (e.g. from a script) renders into the
+        GUI through the store-level field events — no refresh needed."""
+        self.model.current_configuration.params.cake_azimuth_points = 1234
+        self.assertEqual(self.options_widget.cake_azimuth_points_sb.value(), 1234)
+
+        self.model.current_configuration.params.cake_azimuth_range = (-45.0, 45.0)
+        self.assertEqual(self.options_widget.cake_azimuth_min_txt.text(), "-45.0")
+        self.assertEqual(self.options_widget.cake_azimuth_max_txt.text(), "45.0")
+        self.assertFalse(self.options_widget.cake_full_toggle_btn.isChecked())
+
+        self.model.current_configuration.params.cake_azimuth_range = None
+        self.assertTrue(self.options_widget.cake_full_toggle_btn.isChecked())
+
+        self.model.current_configuration.params.calculate_poisson_errors = True
+        self.assertTrue(self.options_widget.calculate_poisson_errors_cb.isChecked())

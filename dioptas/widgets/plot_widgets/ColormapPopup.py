@@ -1,24 +1,7 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 from __future__ import annotations
 
+import math
 import pathlib
 from typing import Optional
 
@@ -44,17 +27,21 @@ class ColormapPopup(QtWidgets.QFrame):
     """Signal emitted when the data range has changed"""
 
     _RESET_MODES = {  # Button text: (mode, tooltip)
-        "Default": ("default", "Use default colormap range autoscale"),
+        "Percentile": (
+            "percentile",
+            "Clip extreme values at the given percentile",
+        ),
         "Min/max": ("minmax", "Use data min/max to scale colormap range"),
         "Mean±3 Std": (
             "mean3std",
             "Use data mean ± 3 × standard deviation to scale colormap range",
         ),
-        "Percentile": (
-            "1percentile",
-            "Use data 1st and 99th percentile to scale colormap range",
-        ),
     }
+
+    # Logarithmic slider parameters
+    _PERCENTILE_MIN = 0.01
+    _PERCENTILE_MAX = 25.0
+    _PERCENTILE_SLIDER_STEPS = 200
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -133,35 +120,58 @@ class ColormapPopup(QtWidgets.QFrame):
 
         resetModeGroupBox = QtWidgets.QGroupBox("Reset Mode", self)
         frameLayout.addWidget(resetModeGroupBox)
-        resetModesLayout = QtWidgets.QGridLayout(resetModeGroupBox)
+        resetModesLayout = QtWidgets.QVBoxLayout(resetModeGroupBox)
         resetModesLayout.setContentsMargins(0, 6, 0, 0)
         resetModesLayout.setSpacing(0)
+
+        current_mode, current_percentile = self._parse_auto_level_mode(
+            utils.auto_level.mode
+        )
 
         self._resetButtonGroup = QtWidgets.QButtonGroup(self)
         for text, (mode, tooltip) in self._RESET_MODES.items():
             radioButton = QtWidgets.QRadioButton(text, self)
             radioButton.setToolTip(tooltip)
-            radioButton.setChecked(mode == utils.auto_level.mode)
+            radioButton.setChecked(mode == current_mode)
             self._resetButtonGroup.addButton(radioButton)
+            resetModesLayout.addWidget(radioButton)
 
-        for index, radioButton in enumerate(self._resetButtonGroup.buttons()):
-            resetModesLayout.addWidget(
-                radioButton, index // 2, index % 2, QtCore.Qt.AlignLeft
-            )
+            if mode == "percentile":
+                sliderLayout = QtWidgets.QHBoxLayout()
+                sliderLayout.setContentsMargins(20, 0, 0, 0)
 
-        self._resetButtonGroup.buttonClicked.connect(self._autoscaleRequested)
+                self._percentileSlider = QtWidgets.QSlider(
+                    QtCore.Qt.Horizontal, self
+                )
+                self._percentileSlider.setRange(0, self._PERCENTILE_SLIDER_STEPS)
+                self._percentileSlider.setValue(
+                    self._percentile_to_slider(current_percentile)
+                )
+                self._percentileSlider.setToolTip("Adjust clipping percentile")
+                self._percentileSlider.valueChanged.connect(
+                    self._percentileSliderChanged
+                )
 
-        self._filterGapsCheckBox = QtWidgets.QCheckBox(self)
+                self._percentileLabel = QtWidgets.QLabel(self)
+                self._percentileLabel.setFixedWidth(40)
+                self._updatePercentileLabel()
+
+                sliderLayout.addWidget(self._percentileSlider)
+                sliderLayout.addWidget(self._percentileLabel)
+                resetModesLayout.addLayout(sliderLayout)
+
+        self._resetButtonGroup.buttonClicked.connect(self._resetModeChanged)
+
+        filterLayout = QtWidgets.QHBoxLayout()
+        filterLayout.setContentsMargins(0, 4, 0, 0)
+        self._filterGapsCheckBox = QtWidgets.QCheckBox("Filter gaps", self)
         self._filterGapsCheckBox.setToolTip("Toggle detector gaps value filtering")
         self._filterGapsCheckBox.setChecked(utils.auto_level.filter_dummy)
         self._filterGapsCheckBox.toggled.connect(self._autoscaleRequested)
-        nrows = resetModesLayout.rowCount()
-        resetModesLayout.addWidget(
-            QtWidgets.QLabel("Filter gaps:"), nrows, 0, QtCore.Qt.AlignRight
-        )
-        resetModesLayout.addWidget(
-            self._filterGapsCheckBox, nrows, 1, QtCore.Qt.AlignLeft
-        )
+        filterLayout.addWidget(self._filterGapsCheckBox)
+        resetModesLayout.addLayout(filterLayout)
+
+        self._updateSliderVisibility()
 
         buttonBox = QtWidgets.QDialogButtonBox(parent=self)
         buttonBox.setStandardButtons(QtWidgets.QDialogButtonBox.Close)
@@ -269,8 +279,70 @@ class ColormapPopup(QtWidgets.QFrame):
     def _getResetMode(self) -> str:
         button = self._resetButtonGroup.checkedButton()
         if button is not None and button.text() in self._RESET_MODES:
-            return self._RESET_MODES[button.text()][0]
-        return "default"  # Fallback
+            mode = self._RESET_MODES[button.text()][0]
+            if mode == "percentile":
+                percentile = self._slider_to_percentile(
+                    self._percentileSlider.value()
+                )
+                return f"{percentile}percentile"
+            return mode
+        return "percentile"  # Fallback
+
+    @staticmethod
+    def _parse_auto_level_mode(mode: str) -> tuple[str, float]:
+        """Parse an AutoLevel mode string into (reset_mode, percentile).
+
+        Returns e.g. ("percentile", 1.5) for "1.5percentile",
+        ("minmax", 0.4) for "minmax", ("percentile", 0.4) for "default".
+        """
+        import re
+
+        match = re.match(r"(\d+(?:\.\d*)?)percentile", mode)
+        if match is not None:
+            return "percentile", float(match.group(1))
+        if mode in ("minmax", "mean3std"):
+            return mode, 0.4
+        # "default" or unknown → percentile with default value
+        return "percentile", 0.4
+
+    def _percentile_to_slider(self, percentile: float) -> int:
+        """Convert a percentile value to slider position (logarithmic)."""
+        percentile = max(self._PERCENTILE_MIN, min(self._PERCENTILE_MAX, percentile))
+        pos = self._PERCENTILE_SLIDER_STEPS * math.log(
+            percentile / self._PERCENTILE_MIN
+        ) / math.log(self._PERCENTILE_MAX / self._PERCENTILE_MIN)
+        return round(pos)
+
+    def _slider_to_percentile(self, pos: int) -> float:
+        """Convert a slider position to percentile value (logarithmic)."""
+        value = self._PERCENTILE_MIN * (
+            self._PERCENTILE_MAX / self._PERCENTILE_MIN
+        ) ** (pos / self._PERCENTILE_SLIDER_STEPS)
+        return round(value, 2)
+
+    def _resetModeChanged(self, button):
+        """Handle reset mode radio button change."""
+        self._updateSliderVisibility()
+        self._autoscaleRequested()
+
+    def _updateSliderVisibility(self):
+        """Show the percentile slider only when Percentile mode is selected."""
+        button = self._resetButtonGroup.checkedButton()
+        visible = button is not None and button.text() == "Percentile"
+        self._percentileSlider.setVisible(visible)
+        self._percentileLabel.setVisible(visible)
+
+    def _percentileSliderChanged(self, value: int):
+        """Handle slider value change: update label and re-trigger autoscale."""
+        self._updatePercentileLabel()
+        button = self._resetButtonGroup.checkedButton()
+        if button is not None and button.text() == "Percentile":
+            self._autoscaleRequested()
+
+    def _updatePercentileLabel(self):
+        """Update the label next to the slider with the current percentile."""
+        percentile = self._slider_to_percentile(self._percentileSlider.value())
+        self._percentileLabel.setText(f"{percentile}%")
 
     def _autoscaleRequested(self, *args):
         utils.auto_level.mode = self._getResetMode()

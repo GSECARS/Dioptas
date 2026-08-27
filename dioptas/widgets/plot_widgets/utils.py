@@ -1,55 +1,21 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 from __future__ import annotations
 
 import re
 from typing import Optional
 import numbers
 import numpy as np
+import pyqtgraph as pg
+from qtpy import QtCore
 
 
 def _default_auto_level(data: np.ndarray) -> tuple[float, float]:
-    """Compute colormap range from data through histogram
+    """Compute colormap range using the 0.4th and 99.6th percentile.
 
     :param data: Data from which to compute levels
     :returns: (lower limit, upper limit)
     """
-    counts, bin_edges = np.histogram(data, bins=3000)
-    left_edges = bin_edges[:-1]
-    left_edges = left_edges[np.where(counts > 0)]
-    counts = counts[np.where(counts > 0)]
-
-    hist_y_cumsum = np.cumsum(counts)
-    hist_y_sum = np.sum(counts)
-
-    max_ind = np.where(hist_y_cumsum < (0.996 * hist_y_sum))
-    min_level = np.mean(left_edges[:2])
-
-    if len(max_ind[0]):
-        max_level = left_edges[max_ind[0][-1]]
-    else:
-        max_level = 0.5 * np.max(left_edges)
-
-    if len(left_edges[left_edges > 0]) > 0:
-        min_level = max(min_level, np.nanmin(left_edges[left_edges > 0]))
-    return min_level, max_level
+    return _percentile_auto_level(data, percentile=0.4)
 
 
 def _minmax_auto_level(data: np.ndarray) -> tuple[float, float]:
@@ -186,3 +152,52 @@ class AutoLevel:
 
 
 auto_level = AutoLevel()
+
+
+class SafeLabelItem(pg.LabelItem):
+    """LabelItem that survives being measured outside its own lifetime.
+
+    pyqtgraph's LabelItem reads ``self._sizeHint`` in sizeHint(), and there
+    are two moments when that attribute is not there:
+
+    - during construction, because updateMin() calls setMinimumWidth/Height
+      — which can trigger a layout pass — before it fills _sizeHint in;
+    - during teardown, when Qt lays out one last time after the Python
+      attributes of the wrapper are already gone.
+
+    Either way an AttributeError is raised inside the Qt event loop, where
+    nothing can handle it. Answering "no size" is the honest response for an
+    item that is not ready or no longer exists.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self._sizeHint = {}
+        super().__init__(*args, **kwargs)
+
+    @property
+    def _usable(self) -> bool:
+        """Whether the Python side of this item is still there.
+
+        Checked rather than assumed: Qt lays items out during teardown, by
+        which point the wrapper's attributes can already be gone.
+        """
+        return (
+            hasattr(self, "item")
+            and hasattr(self, "_sizeHint")
+            and hasattr(self, "_previousGeometry")
+        )
+
+    def sizeHint(self, hint, constraint):
+        if not self._usable:
+            return QtCore.QSizeF(0, 0)
+        return super().sizeHint(hint, constraint)
+
+    def resizeEvent(self, event):
+        if not self._usable:
+            return
+        super().resizeEvent(event)
+
+    def boundingRect(self):
+        if not self._usable:
+            return QtCore.QRectF()
+        return super().boundingRect()

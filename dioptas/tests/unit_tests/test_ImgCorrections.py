@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import unittest
 import gc
@@ -25,8 +7,8 @@ import numpy as np
 import pytest
 
 from ...model.util.ImgCorrection import ImgCorrectionManager, ImgCorrectionInterface, \
-    ObliqueAngleDetectorAbsorptionCorrection
-from ...model.util.ImgCorrection import TransferFunctionCorrection, load_image
+    ObliqueAngleDetectorAbsorptionCorrection, PlateAbsorptionCorrection
+from ...model.util.ImgCorrection import TransferFunctionCorrection, FlatFieldCorrection, load_image
 from ..utility import unittest_data_path
 
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
@@ -151,6 +133,98 @@ class CbnCorrectionTest(unittest.TestCase):
         cbn_correction_data = cbn_correction.get_data()
         self.assertGreater(np.sum(cbn_correction_data), 0)
         self.assertEqual(cbn_correction_data.shape, self.dummy_img.shape)
+
+
+class PlateAbsorptionCorrectionTest(unittest.TestCase):
+    def setUp(self):
+        image_shape = [2048, 2048]
+        detector_distance = 200  # mm
+        wavelength = 0.31  # angstrom
+        center_x = 1024
+        center_y = 1024
+        pixel_size = 79  # um
+        dummy_tth = np.linspace(0, 35, 2000)
+        dummy_int = np.ones(dummy_tth.shape)
+        self.geometry = AzimuthalIntegrator()
+        self.geometry.setFit2D(directDist=detector_distance,
+                               centerX=center_x,
+                               centerY=center_y,
+                               tilt=0,
+                               tiltPlanRotation=0,
+                               pixelX=pixel_size,
+                               pixelY=pixel_size)
+        self.geometry.wavelength = wavelength / 1e10
+        self.dummy_img = self.geometry.calcfrom1d(dummy_tth, dummy_int, shape=image_shape, correctSolidAngle=True)
+
+        self.tth_array = self.geometry.twoThetaArray(image_shape)
+        self.azi_array = self.geometry.chiArray(image_shape)
+
+    def tearDown(self):
+        del self.tth_array
+        del self.azi_array
+        del self.dummy_img
+        del self.geometry
+        gc.collect()
+
+    def test_calculates_correctly(self):
+        correction = PlateAbsorptionCorrection(
+            self.tth_array, self.azi_array,
+            thickness=2.0,
+            absorption_coefficient=0.5,
+        )
+        correction.update()
+        data = correction.get_data()
+        self.assertGreater(np.sum(data), 0)
+        self.assertEqual(data.shape, self.dummy_img.shape)
+        # All values should be between 0 and 1 (absorption reduces intensity)
+        self.assertTrue(np.all(data > 0))
+        self.assertTrue(np.all(data <= 1))
+
+    def test_zero_thickness_gives_unity(self):
+        correction = PlateAbsorptionCorrection(
+            self.tth_array, self.azi_array,
+            thickness=0,
+            absorption_coefficient=0.5,
+        )
+        correction.update()
+        np.testing.assert_array_equal(correction.get_data(), np.ones_like(self.tth_array))
+
+    def test_zero_mu_gives_unity(self):
+        correction = PlateAbsorptionCorrection(
+            self.tth_array, self.azi_array,
+            thickness=2.0,
+            absorption_coefficient=0,
+        )
+        correction.update()
+        np.testing.assert_array_equal(correction.get_data(), np.ones_like(self.tth_array))
+
+    def test_higher_mu_gives_lower_transmission(self):
+        correction_low = PlateAbsorptionCorrection(
+            self.tth_array, self.azi_array,
+            thickness=2.0,
+            absorption_coefficient=0.1,
+        )
+        correction_low.update()
+
+        correction_high = PlateAbsorptionCorrection(
+            self.tth_array, self.azi_array,
+            thickness=2.0,
+            absorption_coefficient=1.0,
+        )
+        correction_high.update()
+
+        self.assertTrue(np.all(correction_high.get_data() < correction_low.get_data()))
+
+    def test_equality(self):
+        c1 = PlateAbsorptionCorrection(
+            self.tth_array, self.azi_array, thickness=2.0, absorption_coefficient=0.5)
+        c2 = PlateAbsorptionCorrection(
+            self.tth_array, self.azi_array, thickness=2.0, absorption_coefficient=0.5)
+        self.assertEqual(c1, c2)
+
+        c3 = PlateAbsorptionCorrection(
+            self.tth_array, self.azi_array, thickness=3.0, absorption_coefficient=0.5)
+        self.assertNotEqual(c1, c3)
 
 
 from ...model.CalibrationModel import CalibrationModel
@@ -346,3 +420,60 @@ class TransferFunctionCorrectionTest(unittest.TestCase):
         transfer_data = self.transfer_correction.get_data()
         self.assertEqual(transfer_data.shape, tuple(np.flip(self.original_data.shape)))
         self.assertEqual(transfer_data.shape, tuple(np.flip(self.response_data.shape)))
+
+
+class FlatFieldCorrectionTest(unittest.TestCase):
+    def setUp(self):
+        self.flat_field_filename = os.path.join(
+            unittest_data_path, "TransferCorrection", "original.tif"
+        )
+        self.flat_field_data = load_image(self.flat_field_filename)
+
+    def test_load_and_normalize(self):
+        correction = FlatFieldCorrection(self.flat_field_filename)
+        data = correction.get_data()
+        self.assertEqual(data.shape, self.flat_field_data.shape)
+        # Mean of normalized correction should be ~1
+        self.assertAlmostEqual(np.mean(data), 1.0, places=5)
+
+    def test_shape(self):
+        correction = FlatFieldCorrection(self.flat_field_filename)
+        self.assertEqual(correction.shape(), self.flat_field_data.shape)
+
+    def test_no_zeros_in_correction(self):
+        """Pixels that were zero in the raw flat field should be set to 1.0 to avoid division by zero."""
+        correction = FlatFieldCorrection()
+        correction.raw_data = np.array([[0.0, 2.0], [3.0, 1.0]])
+        correction._calculate()
+        data = correction.get_data()
+        # The zero pixel should have been replaced with 1.0
+        self.assertEqual(data[0, 0], 1.0)
+        # No zeros should remain
+        self.assertTrue(np.all(data != 0))
+
+    def test_reset(self):
+        correction = FlatFieldCorrection(self.flat_field_filename)
+        correction.reset()
+        self.assertIsNone(correction.get_data())
+        self.assertIsNone(correction.filename)
+
+    def test_get_and_set_params(self):
+        correction = FlatFieldCorrection(self.flat_field_filename)
+        params = correction.get_params()
+        self.assertEqual(params["filename"], self.flat_field_filename)
+        self.assertIsNotNone(params["raw_data"])
+
+        new_correction = FlatFieldCorrection()
+        new_correction.set_params(params)
+        np.testing.assert_array_equal(
+            correction.get_data(), new_correction.get_data()
+        )
+
+    def test_apply_img_transformations(self):
+        from ...model.util.HelperModule import rotate_matrix_m90
+
+        correction = FlatFieldCorrection(self.flat_field_filename)
+        original_shape = correction.shape()
+        correction.set_img_transformations([np.fliplr, rotate_matrix_m90])
+        data = correction.get_data()
+        self.assertEqual(data.shape, tuple(np.flip(original_shape)))

@@ -1,27 +1,9 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import pytest
 import os
 import numpy as np
-from mock import MagicMock
+from mock import MagicMock, patch
 
 from qtpy import QtWidgets
 from xypattern import Pattern
@@ -63,6 +45,22 @@ def test_1D_integration_with_azimuth_limits(
         azi_range=(-100, 80),
         trim_zeros=True,
     )
+
+
+def test_error_export_requests_reintegration_when_option_is_disabled(
+    integration_controller, dioptas_model, mock_integration
+):
+    dioptas_model.pattern_model.errors = np.ones_like(dioptas_model.pattern.x)
+    dioptas_model.current_configuration.calculate_poisson_errors = False
+
+    with patch.object(
+        QtWidgets.QMessageBox,
+        "question",
+        return_value=QtWidgets.QMessageBox.Cancel,
+    ) as question:
+        assert not integration_controller.pattern_controller._ensure_poisson_errors()
+
+    question.assert_called_once()
 
 
 def test_changing_number_of_integration_bins(
@@ -205,4 +203,3 @@ def test_loading_multiple_images_and_batch_save_them(
 
     assert os.path.exists(os.path.join(tmp_path, "batch_image_001.tif"))
     assert os.path.exists(os.path.join(tmp_path, "batch_image_002.tif"))
-

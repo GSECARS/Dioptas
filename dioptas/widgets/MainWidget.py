@@ -1,46 +1,26 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
-import os
-
-from qtpy import QtWidgets, QtGui, QtCore
+from qtpy import QtWidgets, QtCore
 
 from .ConfigurationWidget import ConfigurationWidget
 from .CalibrationWidget import CalibrationWidget
 from .MaskWidget import MaskWidget
 from .integration import IntegrationWidget
 from .MapWidget import MapWidget
+from .MapPanelWidget import MapPanelWindow
 from .CustomWidgets import (
     VerticalSpacerItem,
     CheckableFlatButton,
     FlatButton,
     VerticalLine,
     HorizontalLine,
+    render_icon,
 )
-
-from .. import icons_path
 
 
 class MainWidget(QtWidgets.QWidget):
     def __init__(self, *args, **kwargs):
-        super(MainWidget, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
         self._create_layouts()
 
@@ -48,8 +28,13 @@ class MainWidget(QtWidgets.QWidget):
 
         self._create_menu()
         self._create_mode_menu()
+        self._create_history_menu()
 
         self._left_layout.addLayout(self._menu_layout)
+        # undo/redo sit with the other application-wide actions at the top,
+        # above the mode buttons — they act on the whole session, not on
+        # whichever mode happens to be showing
+        self._left_layout.addLayout(self._history_layout)
         self._left_layout.addLayout(self._mode_layout)
         self._left_layout.addLayout(self._external_actions_layout)
 
@@ -69,7 +54,6 @@ class MainWidget(QtWidgets.QWidget):
         self.add_tooltips()
 
         self._content_layout.addWidget(self.main_frame)
-        self.setWindowIcon(QtGui.QIcon(os.path.join(icons_path, "icon.svg")))
 
     def _style_layouts(self):
         self._outer_layout.setContentsMargins(0, 0, 0, 0)
@@ -79,7 +63,7 @@ class MainWidget(QtWidgets.QWidget):
         self._mode_layout.setContentsMargins(0, 0, 0, 0)
         self._mode_layout.setSpacing(0)
         self._content_layout.setSpacing(0)
-        self._content_layout.setContentsMargins(0, 6, 0, 0)
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
         self._left_layout.setContentsMargins(0, 0, 0, 0)
         self._left_layout.setSpacing(6)
         self._external_actions_layout.setContentsMargins(6, 6, 6, 6)
@@ -91,6 +75,7 @@ class MainWidget(QtWidgets.QWidget):
         self._external_actions_layout = QtWidgets.QVBoxLayout()
         self._content_layout = QtWidgets.QVBoxLayout()
         self._mode_layout = QtWidgets.QVBoxLayout()
+        self._history_layout = QtWidgets.QVBoxLayout()
 
     def _create_mode_menu(self):
         self.mode_btn_group = QtWidgets.QButtonGroup()
@@ -109,6 +94,9 @@ class MainWidget(QtWidgets.QWidget):
         self.mode_btn_group.addButton(self.integration_mode_btn)
         self.mode_btn_group.addButton(self.map_mode_btn)
 
+        # leads the mode block, so it sits flush against the first mode
+        # button instead of being separated from it by the sidebar spacing
+        self._mode_layout.addWidget(HorizontalLine())
         self._mode_layout.addWidget(self.calibration_mode_btn)
         self._mode_layout.addWidget(HorizontalLine())
         self._mode_layout.addWidget(self.mask_mode_btn)
@@ -135,10 +123,61 @@ class MainWidget(QtWidgets.QWidget):
         self.load_btn = FlatButton("Open Project")
         self.reset_btn = FlatButton("Reset Project")
 
+    def _create_history_menu(self):
+        """Undo/redo near the top of the sidebar.
+
+        The history is application-wide, so the controls belong with the
+        other global actions rather than inside any one mode — the mask had
+        the only visible pair before, which left undo undiscoverable
+        everywhere else.
+        """
+        # icons rather than labels: undo/redo are universally recognised
+        # symbols, and SVG keeps them crisp at any scale without depending on
+        # a font shipping the glyphs
+        # Two icons per button, swapped by set_history_enabled: with a
+        # stylesheet applied Qt draws through QStyleSheetStyle, which ignores
+        # an icon's disabled mode, so the fade has to be applied by hand.
+        self._undo_icons = (render_icon("undo.svg"), render_icon("undo.svg", 0.35))
+        self._redo_icons = (render_icon("redo.svg"), render_icon("redo.svg", 0.35))
+
+        self.undo_btn = FlatButton(self)
+        self.undo_btn.setObjectName("undo_btn")
+        self.redo_btn = FlatButton(self)
+        self.redo_btn.setObjectName("redo_btn")
+        self.set_history_enabled(False, False)
+
+        # side by side, the conventional arrangement for the pair, centred
+        # in the column rather than filling it — they are small actions
+        self._history_btn_layout = QtWidgets.QHBoxLayout()
+        self._history_btn_layout.setContentsMargins(0, 0, 0, 0)
+        self._history_btn_layout.setSpacing(2)
+        self._history_btn_layout.addStretch()
+        self._history_btn_layout.addWidget(self.undo_btn)
+        self._history_btn_layout.addWidget(self.redo_btn)
+        self._history_btn_layout.addStretch()
+
+        self._history_layout.setContentsMargins(0, 2, 0, 2)
+        self._history_layout.setSpacing(0)
+        self._history_layout.addLayout(self._history_btn_layout)
+
+    def set_history_enabled(self, can_undo, can_redo):
+        """Enables the history buttons and picks the matching icon.
+
+        The greyed-out icon is the whole disabled cue: the buttons carry no
+        background of their own (see qt_material.css), so an unavailable one
+        simply fades rather than gaining a highlight.
+        """
+        for button, icons, enabled in (
+            (self.undo_btn, self._undo_icons, can_undo),
+            (self.redo_btn, self._redo_icons, can_redo),
+        ):
+            button.setEnabled(enabled)
+            button.setIcon(icons[0] if enabled else icons[1])
+
     def _create_main_frame(self):
         self.main_frame = QtWidgets.QWidget(self)
         self._layout_main_frame = QtWidgets.QVBoxLayout()
-        self._layout_main_frame.setContentsMargins(0, 10, 6, 6)
+        self._layout_main_frame.setContentsMargins(0, 2, 6, 6)
         self._layout_main_frame.setSpacing(0)
         self.main_frame.setLayout(self._layout_main_frame)
 
@@ -146,6 +185,9 @@ class MainWidget(QtWidgets.QWidget):
         self.mask_widget = MaskWidget(self)
         self.integration_widget = IntegrationWidget(self)
         self.map_widget = MapWidget(self)
+        # home for the map panel while it is undocked; parented so it is torn
+        # down with the main window, but shown as its own window
+        self.map_panel_window = MapPanelWindow(self)
 
         self._layout_main_frame.addWidget(self.calibration_widget)
         self._layout_main_frame.addWidget(self.mask_widget)
@@ -162,11 +204,10 @@ class MainWidget(QtWidgets.QWidget):
         self.style_widgets()
         self.add_tooltips()
 
-        self.setWindowIcon(QtGui.QIcon(os.path.join(icons_path, "icon.svg")))
-
     def style_widgets(self):
         self._style_mode_btns()
         self._style_menu_btn()
+        self._style_history_btns()
 
         button_height = 24
         button_width = 24
@@ -182,6 +223,14 @@ class MainWidget(QtWidgets.QWidget):
     def _style_menu_btn(self):
         self.menu_btn.setFixedWidth(30)
         self.menu_btn.setFixedHeight(30)
+
+    def _style_history_btns(self):
+        # small: these are quick actions sitting above the mode buttons, not
+        # modes themselves
+        for btn in (self.undo_btn, self.redo_btn):
+            btn.setWidth(26)
+            btn.setHeight(22)
+            btn.setIconSize(QtCore.QSize(14, 14))
 
     def _style_mode_btns(self):
         mode_btn_width = 75
@@ -225,7 +274,7 @@ class MainWidget(QtWidgets.QWidget):
 
 class MenuPopup(QtWidgets.QFrame):
     def __init__(self, parent=None, menu_items=None):
-        super(MenuPopup, self).__init__(parent)
+        super().__init__(parent)
         self.setFrameShape(QtWidgets.QFrame.StyledPanel)
         self.setFrameShadow(QtWidgets.QFrame.Raised)
         self.setLineWidth(1)

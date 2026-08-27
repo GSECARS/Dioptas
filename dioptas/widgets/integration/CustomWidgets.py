@@ -1,33 +1,15 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 from qtpy import QtWidgets, QtGui, QtCore
 
 from dioptas.widgets.integration import CLICKED_COLOR
 
-from ..CustomWidgets import LabelAlignRight, FlatButton, CleanLooksComboBox
+from ..CustomWidgets import LabelAlignRight, FlatButton
 
 
 class MouseCurrentAndClickedWidget(QtWidgets.QWidget):
     def __init__(self, clicked_color):
-        super(MouseCurrentAndClickedWidget, self).__init__()
+        super().__init__()
 
         self._layout = QtWidgets.QVBoxLayout()
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -44,7 +26,7 @@ class MouseCurrentAndClickedWidget(QtWidgets.QWidget):
 
 class MousePositionWidget(QtWidgets.QWidget):
     def __init__(self, color=None):
-        super(MousePositionWidget, self).__init__()
+        super().__init__()
 
         self._layout = QtWidgets.QHBoxLayout()
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -77,7 +59,7 @@ class MousePositionWidget(QtWidgets.QWidget):
 
 class MouseUnitCurrentAndClickedWidget(QtWidgets.QWidget):
     def __init__(self, clicked_color=CLICKED_COLOR):
-        super(MouseUnitCurrentAndClickedWidget, self).__init__()
+        super().__init__()
         self._layout = QtWidgets.QVBoxLayout()
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(0)
@@ -93,7 +75,7 @@ class MouseUnitCurrentAndClickedWidget(QtWidgets.QWidget):
 
 class MouseUnitWidget(QtWidgets.QWidget):
     def __init__(self, color=None):
-        super(MouseUnitWidget, self).__init__()
+        super().__init__()
 
         self._layout = QtWidgets.QHBoxLayout()
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -129,7 +111,7 @@ class MouseUnitWidget(QtWidgets.QWidget):
 
 class BrowseFileWidget(QtWidgets.QWidget):
     def __init__(self, files, checkbox_text):
-        super(BrowseFileWidget, self).__init__()
+        super().__init__()
 
         self._layout = QtWidgets.QGridLayout()
         self._layout.setContentsMargins(0, 5, 5, 0)
@@ -166,7 +148,7 @@ class BrowseFileWidget(QtWidgets.QWidget):
         self._layout.addLayout(self._directory_layout, 3, 0, 1, 5)
 
         self.sources_widget = QtWidgets.QWidget()
-        self.sources_cb = CleanLooksComboBox()
+        self.sources_cb = QtWidgets.QComboBox()
         self._sources_layout = QtWidgets.QHBoxLayout()
         self._sources_layout.setContentsMargins(0, 0, 0, 0)
         self._sources_layout.addWidget(LabelAlignRight("Source:"))
@@ -194,7 +176,7 @@ class StepWidget(QtWidgets.QWidget):
     iteration_name = ""
 
     def __init__(self):
-        super(StepWidget, self).__init__()
+        super().__init__()
         self.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
 
         self._layout = QtWidgets.QGridLayout()
@@ -238,7 +220,7 @@ class StepFileWidget(StepWidget):
     iteration_name = "file"
 
     def __init__(self):
-        super(StepFileWidget, self).__init__()
+        super().__init__()
         self.browse_by_name_rb = QtWidgets.QRadioButton("By Name")
         self.browse_by_name_rb.setChecked(True)
         self.browse_by_time_rb = QtWidgets.QRadioButton("By Time")
@@ -257,7 +239,7 @@ class StepFrameWidget(StepWidget):
     iteration_name = "frame"
 
     def __init__(self):
-        super(StepFrameWidget, self).__init__()
+        super().__init__()
         self.pos_txt = QtWidgets.QLineEdit()
         self.pos_validator = QtGui.QIntValidator(1, 1)
         self.pos_txt.setValidator(self.pos_validator)

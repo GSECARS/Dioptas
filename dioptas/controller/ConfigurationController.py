@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import os
 from ..widgets.UtilityWidgets import save_file_dialog
@@ -25,8 +7,10 @@ from ..widgets.UtilityWidgets import save_file_dialog
 from ..widgets.ConfigurationWidget import ConfigurationWidget
 from ..model.DioptasModel import DioptasModel
 
+from .binding import Binder
 
-class ConfigurationController(object):
+
+class ConfigurationController:
     """
     Deals with all the signal handling and model upgrades related to be using multiple configurations.
     """
@@ -39,10 +23,13 @@ class ConfigurationController(object):
         self.widget = configuration_widget
         self.model = dioptas_model
         self.controllers = controllers
+        self.binder = Binder(field_events=self.model.configuration_params_changed)
 
         self.update_configuration_widget()
 
         self.create_signals()
+        self.binder.connect_refresh(self.model.configuration_selected)
+        self.binder.refresh()
 
     def create_signals(self):
         self.widget.add_configuration_btn.clicked.connect(self.model.add_configuration)
@@ -52,7 +39,6 @@ class ConfigurationController(object):
 
         self.model.configuration_added.connect(self.update_configuration_widget)
         self.model.configuration_removed.connect(self.update_configuration_widget)
-        self.model.configuration_selected.connect(self.configuration_selected)
 
         self.widget.next_file_btn.clicked.connect(self.load_next_file)
         self.widget.previous_file_btn.clicked.connect(self.load_previous_file)
@@ -60,7 +46,12 @@ class ConfigurationController(object):
         self.widget.next_folder_btn.clicked.connect(self.load_next_folder)
         self.widget.previous_folder_btn.clicked.connect(self.load_previous_folder)
 
-        self.widget.factor_txt.editingFinished.connect(self.factor_txt_changed)
+        self.binder.bind_number_field(
+            self.widget.factor_txt,
+            lambda: self.model.img_model,
+            "factor",
+            event_field="img.factor",
+        )
 
         self.widget.combine_patterns_btn.clicked.connect(self.combine_patterns_btn_clicked)
         self.widget.saved_combined_patterns_btn.clicked.connect(self.save_combined_patterns_btn_clicked)
@@ -72,9 +63,6 @@ class ConfigurationController(object):
             cur_ind=self.model.configuration_ind
         )
 
-    def configuration_selected(self):
-        self.widget.factor_txt.setText(str(self.model.img_model.factor))
-
     def combine_patterns_btn_clicked(self):
         self.model.combine_patterns = self.widget.combine_patterns_btn.isChecked()
 
@@ -83,16 +71,15 @@ class ConfigurationController(object):
         filename = save_file_dialog(
             self.widget, "Save Combined Pattern Data.",
             os.path.join(self.model.working_directories['pattern'],
-                         img_filename + '_combined.dat'), ('.dat'))
+                         img_filename + '_combined.xy'),
+            'Data (*.xy);;Data (*.chi);;Data (*.dat);;GSAS (*.fxye)')
 
         if filename != '':
+            self.model.working_directories['pattern'] = os.path.dirname(filename)
             self.model.save_combined_pattern(filename)
 
     def combine_cakes_btn_clicked(self):
         self.model.combine_cakes = self.widget.combine_cakes_btn.isChecked()
-
-    def factor_txt_changed(self):
-        self.model.img_model.factor = float(str(self.widget.factor_txt.text()))
 
     def load_next_file(self):
         pos = int(str(self.widget.file_iterator_pos_txt.text()))

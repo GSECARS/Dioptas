@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import os
 from mock import MagicMock
@@ -224,29 +206,80 @@ class ConfigurationControllerTest(QtTest):
             ),
         )
 
-    def test_save_combined_pattern(self):
-        # prepare two patterns
-        x1 = np.linspace(0, 10)
-        y1 = np.ones(x1.shape)
-        pattern1 = Pattern(x1, y1)
+    def _setup_two_calibrated_configurations(self):
+        """Helper to set up two calibrated configurations for combined pattern tests."""
+        self.model.calibration_model.load(
+            os.path.join(data_path, "CeO2_Pilatus1M.poni")
+        )
+        self.model.img_model.load(os.path.join(data_path, "CeO2_Pilatus1M.tif"))
 
-        x2 = np.linspace(7, 15)
-        y2 = np.ones(x2.shape) * 2
-        pattern2 = Pattern(x2, y2)
-
-        self.model.pattern_model.pattern = pattern1
         self.model.add_configuration()
-        self.model.pattern_model.pattern = pattern2
+        self.model.calibration_model.load(
+            os.path.join(data_path, "CeO2_Pilatus1M_2.poni")
+        )
+        self.model.img_model.load(os.path.join(data_path, "CeO2_Pilatus1M.tif"))
+
+    def test_save_combined_pattern(self):
+        self._setup_two_calibrated_configurations()
+        x1, _ = self.model.configurations[0].pattern_model.pattern.data
 
         self.model.combine_patterns = True
 
-        # click the button
+        # mock dialog with PyQt6-style tuple return (filename, selected_filter)
         file_path = os.path.join(data_path, "combined_pattern.xy")
-        QtWidgets.QFileDialog.getSaveFileName = MagicMock(return_value=file_path)
+        QtWidgets.QFileDialog.getSaveFileName = MagicMock(
+            return_value=(file_path, "Data (*.xy)")
+        )
         click_button(self.config_widget.saved_combined_patterns_btn)
 
         # load and check that it worked
         saved_pattern = Pattern.from_file(file_path)
         x3, _ = saved_pattern.data
-        self.assertLess(np.min(x3), 7)
-        self.assertGreater(np.max(x3), 10)
+        self.assertGreater(np.max(x3), np.max(x1))
+        self.assertGreater(len(x3), 0)
+
+        delete_if_exists(file_path)
+
+    def test_save_combined_pattern_uses_multigeometry(self):
+        """Verify that saved combined pattern contains data from MultiGeometry
+        integration covering the range of both configurations, not just one."""
+        self._setup_two_calibrated_configurations()
+
+        # get individual patterns from each configuration
+        x1, _ = self.model.configurations[0].pattern_model.pattern.data
+        x2, _ = self.model.configurations[1].pattern_model.pattern.data
+
+        self.model.combine_patterns = True
+
+        file_path = os.path.join(data_path, "combined_pattern.xy")
+        QtWidgets.QFileDialog.getSaveFileName = MagicMock(
+            return_value=(file_path, "Data (*.xy)")
+        )
+        click_button(self.config_widget.saved_combined_patterns_btn)
+
+        saved_pattern = Pattern.from_file(file_path)
+        x_combined, _ = saved_pattern.data
+
+        # combined pattern should span a wider range than either individual pattern
+        self.assertGreater(
+            np.max(x_combined),
+            max(np.max(x1), np.max(x2)) * 0.95,
+            "Combined pattern should cover at least the range of both configurations",
+        )
+        self.assertGreater(len(x_combined), 0)
+
+        delete_if_exists(file_path)
+
+    def test_save_combined_pattern_cancel_dialog(self):
+        """Verify no file is written when user cancels the save dialog."""
+        self._setup_two_calibrated_configurations()
+        self.model.combine_patterns = True
+
+        file_path = os.path.join(data_path, "combined_pattern.xy")
+        # PyQt6 returns ('', '') when dialog is cancelled
+        QtWidgets.QFileDialog.getSaveFileName = MagicMock(
+            return_value=("", "")
+        )
+        click_button(self.config_widget.saved_combined_patterns_btn)
+
+        self.assertFalse(os.path.exists(file_path))

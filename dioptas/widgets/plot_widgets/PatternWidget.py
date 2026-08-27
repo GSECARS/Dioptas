@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import pyqtgraph as pg
 import numpy as np
@@ -38,7 +20,7 @@ class PatternWidget(QtCore.QObject):
     auto_range_status_changed = QtCore.Signal(bool)
 
     def __init__(self, pg_layout):
-        super(PatternWidget, self).__init__()
+        super().__init__()
         self.pg_layout = pg_layout
         self.create_graphics()
         self.create_main_plot()
@@ -46,6 +28,12 @@ class PatternWidget(QtCore.QObject):
         self.modify_mouse_behavior()
 
         self._auto_range = True
+        self._y_scale = "linear"
+
+        # Store original (untransformed) y-data for re-plotting on scale change
+        self._orig_y = np.array([])
+        self._orig_bkg_y = np.array([])
+        self._orig_overlay_y = []  # list parallel to self.overlays
 
         self.phases = []  # type: list[PhasePlot]
         self.phases_vlines = []
@@ -59,6 +47,7 @@ class PatternWidget(QtCore.QObject):
             labels={"left": "Intensity", "bottom": "2 Theta"}
         )
         self.pattern_plot.setLabel("bottom", "2θ", "°")
+        self.pattern_plot.getAxis("bottom").enableAutoSIPrefix(False)
         self.pattern_plot.enableAutoRange(False)
         self.pattern_plot.buttonsHidden = True
         self.view_box = self.pattern_plot.vb
@@ -92,7 +81,8 @@ class PatternWidget(QtCore.QObject):
         self.legend.setParentItem(self.pattern_plot.vb)
         self.legend.anchor(itemPos=(1, 0), parentPos=(1, 0), offset=(-10, -10))
         self.phases_legend.setParentItem(self.pattern_plot.vb)
-        self.phases_legend.anchor(itemPos=(0, 0), parentPos=(0, 0), offset=(0, -10))
+        # x-offset keeps the phase names clear of the y-axis line
+        self.phases_legend.anchor(itemPos=(0, 0), parentPos=(0, 0), offset=(15, -10))
 
         self.bkg_roi = ModifiedLinearRegionItem(
             [5, 20],
@@ -115,6 +105,50 @@ class PatternWidget(QtCore.QObject):
         if self._auto_range is True:
             self.update_graph_range()
 
+    def _transform_y(self, y):
+        if self._y_scale == "log":
+            return np.log10(np.clip(y, a_min=1e-10, a_max=None))
+        elif self._y_scale == "sqrt":
+            return np.sqrt(np.clip(y, a_min=0, a_max=None))
+        return y
+
+    def _update_y_axis_label(self):
+        if self._y_scale == "log":
+            self.pattern_plot.setLabel("left", "log(Intensity)")
+        elif self._y_scale == "sqrt":
+            self.pattern_plot.setLabel("left", "sqrt(Intensity)")
+        else:
+            self.pattern_plot.setLabel("left", "Intensity")
+
+    def set_y_scale(self, mode):
+        if mode not in ("linear", "log", "sqrt"):
+            return
+        if mode == self._y_scale:
+            return
+        self._y_scale = mode
+        self._update_y_axis_label()
+        self._replot_all_transformed()
+
+    def _replot_all_transformed(self):
+        # Re-transform main plot
+        x_data = self.plot_item.getData()[0]
+        if x_data is not None and len(self._orig_y) > 0:
+            self.plot_item.setData(x_data, self._transform_y(self._orig_y))
+
+        # Re-transform background
+        bkg_x = self.bkg_item.getData()[0]
+        if bkg_x is not None and len(self._orig_bkg_y) > 0:
+            self.bkg_item.setData(bkg_x, self._transform_y(self._orig_bkg_y))
+
+        # Re-transform overlays
+        for ind, overlay in enumerate(self.overlays):
+            if ind < len(self._orig_overlay_y):
+                ox = overlay.getData()[0]
+                if ox is not None and len(self._orig_overlay_y[ind]) > 0:
+                    overlay.setData(ox, self._transform_y(self._orig_overlay_y[ind]))
+
+        self.update_graph_range()
+
     def create_pos_line(self):
         self.pos_line = pg.InfiniteLine(
             pen=pg.mkPen(color=(0, 255, 0), width=1.5, style=QtCore.Qt.DashLine)
@@ -125,6 +159,10 @@ class PatternWidget(QtCore.QObject):
         if self.pos_line.scene() == self.pattern_plot.scene():
             self.pattern_plot.removeItem(self.pos_line)
 
+    def activate_pos_line(self):
+        if self.pos_line.scene() != self.pattern_plot.scene():
+            self.pattern_plot.addItem(self.pos_line)
+
     def set_pos_line(self, x):
         self.pos_line.setPos(x)
 
@@ -132,7 +170,8 @@ class PatternWidget(QtCore.QObject):
         return self.pos_line.value()
 
     def plot_data(self, x, y, name=None):
-        self.plot_item.setData(x, y)
+        self._orig_y = np.asarray(y)
+        self.plot_item.setData(x, self._transform_y(self._orig_y))
         if name is not None:
             self.legend.legendItems[0][1].setText(name)
             self.plot_name = name
@@ -140,7 +179,8 @@ class PatternWidget(QtCore.QObject):
         self.update_graph_range()
 
     def plot_bkg(self, x, y):
-        self.bkg_item.setData(x, y)
+        self._orig_bkg_y = np.asarray(y)
+        self.bkg_item.setData(x, self._transform_y(self._orig_bkg_y) if len(self._orig_bkg_y) > 0 else y)
 
     def update_graph_range(self):
         x_range = list(self.plot_item.dataBounds(0))
@@ -184,8 +224,10 @@ class PatternWidget(QtCore.QObject):
         self, pattern: Pattern, color: tuple[int, int, int], show: bool = True
     ):
         x, y = pattern.data
+        orig_y = np.asarray(y)
+        self._orig_overlay_y.append(orig_y)
         self.overlays.append(
-            pg.PlotDataItem(x, y, pen=pg.mkPen(color=color, width=1.5))
+            pg.PlotDataItem(x, self._transform_y(orig_y), pen=pg.mkPen(color=color, width=1.5))
         )
         if show:
             self.pattern_plot.addItem(self.overlays[-1])
@@ -198,6 +240,7 @@ class PatternWidget(QtCore.QObject):
             self.pattern_plot.removeItem(self.overlays[ind])
         self.legend.removeItem(self.overlays[ind])
         self.overlays.remove(self.overlays[ind])
+        del self._orig_overlay_y[ind]
 
     def hide_overlay(self, ind):
         if not self.overlays[ind] in self.pattern_plot.items:
@@ -223,7 +266,9 @@ class PatternWidget(QtCore.QObject):
         self.update_graph_range()
 
     def set_overlay_data(self, ind, x, y):
-        self.overlays[ind].setData(x, y)
+        orig_y = np.asarray(y)
+        self._orig_overlay_y[ind] = orig_y
+        self.overlays[ind].setData(x, self._transform_y(orig_y))
 
     def set_overlay_color(self, ind: int, color):
         self.overlays[ind].setPen(pg.mkPen(color=color, width=1.5))
@@ -282,15 +327,16 @@ class PatternWidget(QtCore.QObject):
         self.phases[ind].remove()
         del self.phases[ind]
 
-    def plot_vertical_lines(self, positions, name=None):
+    def plot_vertical_lines(self, positions, name=None, numbers=None):
         if len(self.phases_vlines) > 0:
-            self.phases_vlines[0].set_data(positions, name)
+            self.phases_vlines[0].set_data(positions, name, numbers)
         else:
             self.phases_vlines.append(
                 PhaseLinesPlot(
                     self.pattern_plot,
                     positions,
                     pen=pg.mkPen(color=(200, 50, 50), style=QtCore.Qt.SolidLine),
+                    numbers=numbers,
                 )
             )
 
@@ -310,7 +356,8 @@ class PatternWidget(QtCore.QObject):
 
     # map interactive linear region functions
     def show_map_interactive_roi(self):
-        self.pattern_plot.addItem(self.map_interactive_roi)
+        if self.map_interactive_roi.scene() != self.pattern_plot.scene():
+            self.pattern_plot.addItem(self.map_interactive_roi)
 
     def set_map_interactive_roi(self, x_min, x_max):
         self.map_interactive_roi.setRegion((x_min, x_max))
@@ -479,13 +526,14 @@ class PatternWidget(QtCore.QObject):
             self.emit_sig_range_changed()
 
 
-class PhaseLinesPlot(object):
+class PhaseLinesPlot:
     def __init__(
         self,
         plot_item,
         positions=None,
         name="Dummy",
         pen=pg.mkPen(color=(120, 120, 120), style=QtCore.Qt.DashLine),
+        numbers=None,
     ):
         self.plot_item = plot_item
         self.peak_positions = []
@@ -494,9 +542,9 @@ class PhaseLinesPlot(object):
         self.name = name
 
         if positions is not None:
-            self.set_data(positions, name)
+            self.set_data(positions, name, numbers)
 
-    def set_data(self, positions, name):
+    def set_data(self, positions, name, numbers=None):
         # remove all old lines
         for item in self.line_items:
             # Only remove if item belongs to this scene
@@ -507,12 +555,23 @@ class PhaseLinesPlot(object):
         self.line_items = []
         self.peak_positions = positions
         for ind, position in enumerate(positions):
-            self.line_items.append(pg.InfiniteLine(pen=self.pen))
-            self.line_items[ind].setValue(position)
-            self.plot_item.addItem(self.line_items[ind])
+            line = pg.InfiniteLine(pen=self.pen)
+            line.setValue(position)
+            if numbers is not None:
+                # alternating heights so labels of closely spaced lines
+                # don't overlap
+                pg.InfLineLabel(
+                    line,
+                    text=str(numbers[ind]),
+                    position=0.97 if ind % 2 else 0.93,
+                    color=self.pen.color(),
+                    movable=False,
+                )
+            self.line_items.append(line)
+            self.plot_item.addItem(line)
 
 
-class PhasePlot(object):
+class PhasePlot:
     num_phases = 0
 
     def __init__(
@@ -567,9 +626,10 @@ class PhasePlot(object):
             pg.PlotDataItem(x=[0, 0], y=[0, 0], pen=self.pen, antialias=False)
         )
         self.line_visible.append(True)
-        self.plot_item.blockSignals(True)
-        self.plot_item.addItem(self.line_items[-1])
-        self.plot_item.blockSignals(False)
+        if self.visible:
+            self.plot_item.blockSignals(True)
+            self.plot_item.addItem(self.line_items[-1])
+            self.plot_item.blockSignals(False)
 
     def delete_line(self, ind=-1):
         # Only remove if item belongs to this scene
@@ -584,11 +644,14 @@ class PhasePlot(object):
             self.delete_line()
 
     def update_intensities(self, positions, intensities, baseline=0):
-        if self.visible:
-            for ind, intensity in enumerate(intensities):
-                self.line_items[ind].setData(
-                    y=[baseline, intensity], x=[positions[ind], positions[ind]]
-                )
+        while len(self.line_items) < len(positions):
+            self.add_line()
+        while len(self.line_items) > len(positions):
+            self.delete_line()
+        for ind, intensity in enumerate(intensities):
+            self.line_items[ind].setData(
+                y=[baseline, intensity], x=[positions[ind], positions[ind]]
+            )
 
     def update_visibilities(self, pattern_range):
         if self.visible and pattern_range[0] is not None:
@@ -642,7 +705,7 @@ class PhasePlot(object):
 
 class ModifiedLinearRegionItem(pg.LinearRegionItem):
     def __init__(self, *args, **kwargs):
-        super(ModifiedLinearRegionItem, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def mouseDragEvent(self, ev):
         return
@@ -653,7 +716,7 @@ class ModifiedLinearRegionItem(pg.LinearRegionItem):
 
 class SymmetricModifiedLinearRegionItem(pg.LinearRegionItem):
     def __init__(self, *args, **kwargs):
-        super(SymmetricModifiedLinearRegionItem, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.center = (
             self.lines[1].getXPos() - self.lines[0].getXPos()
         ) / 2 + self.lines[0].getXPos()

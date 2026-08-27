@@ -1,27 +1,10 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 from ..utility import QtTest, click_button, click_checkbox
 import os
 import gc
 
+import pytest
 from qtpy import QtWidgets, QtCore, QtGui
 from qtpy.QtTest import QTest
 from mock import MagicMock
@@ -105,6 +88,21 @@ class PhaseControllerTest(QtTest):
         self.assertEqual(len(self.model.phase_model.phases), 0)
         self.assertEqual(len(self.widget.pattern_widget.phases), 0)
         self.assertEqual(self.phase_tw.currentRow(), -1)
+
+    def test_database_phase_shows_material_name_separately_from_reference(self):
+        from ...model import eos
+
+        material = next(item for item in eos.load_materials()
+                        if item.name == 'Akimotoite')
+        phase = eos.build_jcpds(material, origin='bundled')
+
+        self.model.phase_model.add_jcpds_object(
+            phase, filename=phase.filename)
+
+        self.assertEqual(
+            self.phase_tw.item(0, 2).text(), 'Akimotoite (MgSiO3)')
+        self.assertNotIn('Siersch', self.phase_tw.item(0, 2).text())
+        self.assertIn('Siersch', self.phase_widget.reference_cbs[0].currentText())
 
     def test_automatic_deleting_phases(self):
         self.load_phases()
@@ -375,6 +373,22 @@ def test_save_phaselist(qapp, tmp_path):
     assert len(model.phase_model.phases) == 2
 
 
-def test_save_phaselist_with_german_locale(qapp, tmp_path):
+@pytest.fixture
+def german_locale():
+    """Use a German default locale for the duration of one test.
+
+    QLocale.setDefault is process-global, so it has to be restored: otherwise
+    every later test in the same process formats and validates numbers with a
+    comma decimal separator, which silently breaks any test that types "1.0"
+    into a QDoubleValidator-backed field.
+    """
+    previous = QtCore.QLocale()
     QtCore.QLocale.setDefault(QtCore.QLocale(QtCore.QLocale.German))
+    try:
+        yield
+    finally:
+        QtCore.QLocale.setDefault(previous)
+
+
+def test_save_phaselist_with_german_locale(qapp, tmp_path, german_locale):
     test_save_phaselist(qapp, tmp_path)

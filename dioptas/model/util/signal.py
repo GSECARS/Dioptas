@@ -1,145 +1,129 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
+
+"""Observer-pattern Signal backed by psygnal.
+
+The public API is the historical Dioptas ``Signal`` (instance-level
+construction, ``connect(handle, priority=...)``, writable ``blocked``,
+``has_listener``, signal-to-signal chaining), while dispatch, weak-reference
+handling and pause/batching come from :class:`psygnal.SignalInstance`.
+
+Semantics inherited from the previous implementation:
+
+- Listeners taking no arguments are called without arguments, all others
+  receive every emitted argument.
+- Bound-method listeners are held by weak reference and drop out
+  automatically when their instance is garbage-collected.
+- Exceptions raised by a listener propagate unwrapped to the emitter.
+- Connecting a ``Signal`` as listener forwards emissions to it.
+
+New capability: ``paused()`` batches emissions — signals emitted inside the
+context are queued and delivered on exit (optionally reduced to a single
+emission with ``reducer``).
+"""
 
 import inspect
-import weakref
+from collections.abc import Callable
+from contextlib import contextmanager
+from typing import Any, Iterator
+
+from psygnal import EmitLoopError, SignalInstance
 
 __export__ = ["Signal"]
 
 
 class Signal:
-    def __init__(self, *_):
-        self.listeners = WeakRefList()
-        self.priority_listeners = WeakRefList()
-        self.blocked = False
+    def __init__(self, *_: type) -> None:
+        self._psygnal: SignalInstance = SignalInstance()
+        self._blocked: bool = False
 
-    def connect(self, handle, priority=False):
+    def connect(self, handle: Callable[..., Any], priority: bool = False) -> None:
+        """Connects a function handle to the Signal.
+
+        If *priority* is True the handle is called before regular listeners.
         """
-        Connects a function handle to the Signal.
-        :param handle: function handle to be called when the signal is emitted
-        :param priority: if set to True, the handle will be added as the first function to be called in the case of
-                        the event
-        If multiple handles are added with priority, they will obviously be called in the reverse order of adding.
-        """
-        if priority:
-            self.priority_listeners.insert(0, handle)
+        slot = self._as_slot(handle)
+        max_args = 0 if _accepts_no_args(slot) else None
+        self._psygnal.connect(
+            slot,
+            check_nargs=False,
+            max_args=max_args,
+            priority=1 if priority else 0,
+            on_ref_error="ignore",  # keep a strong ref when weakref is impossible
+        )
+
+    def disconnect(self, handle: Callable[..., Any]) -> None:
+        """Removes a function handle from the listeners."""
+        self._psygnal.disconnect(self._as_slot(handle), missing_ok=True)
+
+    def emit(self, *args: Any) -> None:
+        try:
+            self._psygnal.emit(*args)
+        except EmitLoopError as e:
+            raise _unwrap(e) from None
+
+    def clear(self) -> None:
+        """Removes all listeners from the Signal."""
+        self._psygnal.disconnect()
+
+    @property
+    def blocked(self) -> bool:
+        return self._blocked
+
+    @blocked.setter
+    def blocked(self, value: bool) -> None:
+        self._blocked = bool(value)
+        if self._blocked:
+            self._psygnal.block()
         else:
-            self.listeners.append(handle)
+            self._psygnal.unblock()
 
-    def disconnect(self, handle):
-        """
-        Removes a certain function handle from the list of listeners to be called in case of Signal emitted.
-        :param handle: function handle to be removed from the listeners
-        """
-        try:
-            self.listeners.remove(handle)
-        except ValueError:
-            pass
-
-        try:
-            self.priority_listeners.remove(handle)
-        except ValueError:
-            pass
-
-    def emit(self, *args):
-        if self.blocked:
-            return
-        self._serve_listeners(self.priority_listeners, *args)
-        self._serve_listeners(self.listeners, *args)
-
-    @staticmethod
-    def _serve_listeners(listeners, *args):
-        for ref in listeners:
-            handle = ref()
-            if type(handle) == Signal:
-                handle.emit(*args)
-            else:
-                if len(inspect.signature(handle).parameters) == 0:
-                    handle()
-                else:
-                    handle(*args)
-
-    def clear(self):
-        """
-        Removes all listeners from the Signal.
-        """
-        self.listeners = WeakRefList()
-        self.priority_listeners = WeakRefList()
-
-    def block(self):
-        """
-        Blocks the Signal from emitting.
-        """
+    def block(self) -> None:
+        """Blocks the Signal from emitting."""
         self.blocked = True
 
-    def unblock(self):
-        """
-        Unblocks the Signal from emitting.
-        """
+    def unblock(self) -> None:
+        """Unblocks the Signal from emitting."""
         self.blocked = False
 
-    def has_listener(self, handle):
+    @contextmanager
+    def paused(
+        self, reducer: Callable[[tuple, tuple], tuple] | None = None
+    ) -> Iterator[None]:
+        """Context manager batching emissions until exit.
+
+        Without *reducer* every queued emission is delivered on exit; with a
+        reducer the queued emission args are folded pairwise into a single
+        emission (e.g. ``lambda a, b: b`` keeps only the latest). Listener
+        exceptions raised during the flush propagate unwrapped, like emit().
         """
-        Returns True if the handle is in the list of listeners.
-        """
-        return handle in self.listeners or handle in self.priority_listeners
+        try:
+            with self._psygnal.paused(reducer):
+                yield
+        except EmitLoopError as e:
+            raise _unwrap(e) from None
+
+    def has_listener(self, handle: Callable[..., Any]) -> bool:
+        """Returns True if the handle is in the list of listeners."""
+        slot = self._as_slot(handle)
+        # psygnal has no public containment check; _slots holds WeakCallback
+        # objects whose dereference() returns the original callable (or None
+        # once garbage-collected). Covered by unit tests against upgrades.
+        return any(cb.dereference() == slot for cb in self._psygnal._slots)
+
+    @staticmethod
+    def _as_slot(handle: Callable[..., Any]) -> Callable[..., Any]:
+        return handle.emit if isinstance(handle, Signal) else handle
 
 
-class WeakRefList(list):
-    """
-    A list which holds weak references to its items. If an item is deleted, the reference to it will be removed from
-    the list. This is useful for Signals, where we want to hold a list of listeners, but don't want to prevent the
-    garbage collector from deleting the listeners.
-    It is not a full reimplementation, only the methods which are used in the Signal class are implemented - append,
-    remove, insert. This list will work for object methods as well as objects. To retrieve the orginal item, the
-    value of the weak reference has to be called. E.g.:
-    >>> class A:
-    >>>     def method(self):
-    >>>         return "lala"
-    >>>
-    >>> a = A()
-    >>> weak_ref_list = WeakRefList()
-    >>> weak_ref_list.append(a.method)
-    >>> weak_ref_list[0]()() == "lala"
-    """
-
-    def append(self, item):
-        super(WeakRefList, self).append(self._ref(item))
-
-    def remove(self, item):
-        super(WeakRefList, self).remove(self._ref(item))
-
-    def insert(self, index, item):
-        super(WeakRefList, self).insert(index, self._ref(item))
-
-    def _remove_ref(self, ref):
-        super(WeakRefList, self).remove(ref)
-
-    def _ref(self, item):
-        if inspect.ismethod(item):
-            return weakref.WeakMethod(item, self._remove_ref)
-        else:
-            return weakref.ref(item, self._remove_ref)
-
-    def __contains__(self, item):
-        for ref in self:
-            if ref() == item:
-                return True
+def _accepts_no_args(slot: Callable[..., Any]) -> bool:
+    try:
+        sig = inspect.signature(slot)
+    except (ValueError, TypeError):
         return False
+    return len(sig.parameters) == 0
+
+
+def _unwrap(error: EmitLoopError) -> BaseException:
+    """Returns the listener's original exception from a psygnal EmitLoopError."""
+    cause = error.__cause__
+    return cause if cause is not None else error

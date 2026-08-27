@@ -1,34 +1,45 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import numpy as np
 
 
-def convert_units(value, wavelength, previous_unit, new_unit):
+_HC_EV_M = 6.62607015e-34 * 299792458.0 / 1.602176634e-19  # h*c in eV·m
+
+
+def wavelength_to_energy(wavelength_m: float) -> float:
+    """Convert wavelength in meters to energy in eV."""
+    return _HC_EV_M / wavelength_m
+
+
+def energy_to_wavelength(energy_eV: float) -> float:
+    """Convert energy in eV to wavelength in meters."""
+    return _HC_EV_M / energy_eV
+
+
+def calculate_mu(formula: str, energy_eV: float, density: float | None = None) -> float:
+    """Calculate linear absorption coefficient using xraydb.
+
+    Returns the linear absorption coefficient in 1/mm.
     """
-    Converts a value from a unit into a new unit
-    :param value: value in old unit
-    :param wavelength: in Angstrom
-    :param previous_unit: possible values are '2th_deg', 'q_A^-1', 'd_A'
-    :param new_unit: possible values are '2th_deg', 'q_A^-1', 'd_A'
-    :return: new value or None if unit does not exist
+    import xraydb
+
+    kwargs = {}
+    if density is not None:
+        kwargs["density"] = density
+    mu_per_cm = xraydb.material_mu(formula, energy_eV, **kwargs)
+    return mu_per_cm / 10.0  # convert 1/cm to 1/mm
+
+
+def convert_units(
+    value: float | np.ndarray,
+    wavelength: float,
+    previous_unit: str,
+    new_unit: str,
+) -> float | np.ndarray | None:
+    """Converts a value between units.
+
+    Supported units: ``'2th_deg'``, ``'q_A^-1'``, ``'d_A'``.
+    *wavelength* is in Angstrom.  Returns None if the unit is unknown.
     """
     if previous_unit == '2th_deg':
         tth = value
@@ -53,13 +64,8 @@ def convert_units(value, wavelength, previous_unit, new_unit):
     return res
 
 
-def supersample_image(img_data, factor):
-    """
-    Creates a supersampled array from img_data.
-    :param img_data: image array
-    :param factor: int - supersampling factor
-    :return: supersampled image
-    """
+def supersample_image(img_data: np.ndarray, factor: int) -> np.ndarray:
+    """Creates a supersampled array from *img_data*."""
     if factor > 1:
         img_data_supersampled = np.zeros((img_data.shape[0] * factor,
                                           img_data.shape[1] * factor))
@@ -72,14 +78,10 @@ def supersample_image(img_data, factor):
         return img_data
 
 
-def trim_trailing_zeros(x, y):
-    """
-    Trims the trailing zeros of a x, y pattern
-    :param x: x-values
-    :param y: y-values
-    :return: trimmed x, y values as tuple (x, y)
-    """
-
+def trim_trailing_zeros(
+    x: np.ndarray, y: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Trims trailing zeros from a pattern."""
     y_trim = np.trim_zeros(y, 'b')
     x_trim = x[:len(y_trim)]
 

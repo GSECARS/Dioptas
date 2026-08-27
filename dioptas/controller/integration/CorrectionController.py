@@ -1,23 +1,6 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
+import logging
 import numpy as np
 import time
 import os
@@ -26,15 +9,22 @@ from qtpy import QtWidgets
 from ...model.util.ImgCorrection import (
     CbnCorrection,
     ObliqueAngleDetectorAbsorptionCorrection,
+    SlabAbsorptionCorrection,
+    CylinderAbsorptionCorrection,
+    SphereAbsorptionCorrection,
+    PlateAbsorptionCorrection,
 )
+from ...model.util.calc import calculate_mu, wavelength_to_energy
 
 # imports for type hinting in PyCharm -- DO NOT DELETE
 from ...widgets.integration import IntegrationWidget
 from ...widgets.UtilityWidgets import open_file_dialog
 from ...model.DioptasModel import DioptasModel
 
+logger = logging.getLogger(__name__)
 
-class CorrectionController(object):
+
+class CorrectionController:
     """
     The CorrectionController manages the Correction controls in the integration window.
     """
@@ -56,19 +46,46 @@ class CorrectionController(object):
     def create_signals(self):
         # cbn correction
         self.widget.cbn_groupbox.clicked.connect(self.cbn_groupbox_changed)
-        for row_ind in range(self.widget.cbn_param_tw.rowCount()):
-            self.widget.cbn_param_tw.cellWidget(row_ind, 1).editingFinished.connect(
-                self.cbn_groupbox_changed
-            )
+        self.widget.cbn_param_form.changed.connect(self.cbn_groupbox_changed)
         self.widget.cbn_plot_btn.clicked.connect(self.cbn_plot_correction_btn_clicked)
 
         # oiadac correction
         self.widget.oiadac_groupbox.clicked.connect(self.oiadac_groupbox_changed)
-        for row_ind in range(self.widget.oiadac_param_tw.rowCount()):
-            self.widget.oiadac_param_tw.cellWidget(row_ind, 1).editingFinished.connect(
-                self.oiadac_groupbox_changed
-            )
+        self.widget.oiadac_param_form.changed.connect(self.oiadac_groupbox_changed)
         self.widget.oiadac_plot_btn.clicked.connect(self.oiadac_plot_btn_clicked)
+
+        # slab correction
+        self.widget.slab_groupbox.clicked.connect(self.slab_groupbox_changed)
+        self.widget.slab_param_form.changed.connect(self.slab_groupbox_changed)
+        self.widget.slab_formula_txt.editingFinished.connect(self.slab_groupbox_changed)
+        self.widget.slab_plot_btn.clicked.connect(self.slab_plot_btn_clicked)
+
+        # cylinder correction
+        self.widget.cylinder_groupbox.clicked.connect(self.cylinder_groupbox_changed)
+        self.widget.cylinder_param_form.changed.connect(self.cylinder_groupbox_changed)
+        self.widget.cylinder_formula_txt.editingFinished.connect(self.cylinder_groupbox_changed)
+        self.widget.cylinder_container_formula_txt.editingFinished.connect(self.cylinder_groupbox_changed)
+        self.widget.cylinder_container_param_form.changed.connect(self.cylinder_groupbox_changed)
+        self.widget.cylinder_plot_btn.clicked.connect(self.cylinder_plot_btn_clicked)
+
+        # sphere correction
+        self.widget.sphere_groupbox.clicked.connect(self.sphere_groupbox_changed)
+        self.widget.sphere_param_form.changed.connect(self.sphere_groupbox_changed)
+        self.widget.sphere_formula_txt.editingFinished.connect(self.sphere_groupbox_changed)
+        self.widget.sphere_plot_btn.clicked.connect(self.sphere_plot_btn_clicked)
+
+        # plate correction
+        self.widget.plate_groupbox.clicked.connect(self.plate_groupbox_changed)
+        self.widget.plate_param_form.changed.connect(self.plate_groupbox_changed)
+        self.widget.plate_formula_txt.editingFinished.connect(self.plate_groupbox_changed)
+        self.widget.plate_plot_btn.clicked.connect(self.plate_plot_btn_clicked)
+
+        # flat field correction
+        self.widget.flat_field_load_btn.clicked.connect(
+            self.flat_field_load_btn_clicked
+        )
+        self.widget.flat_field_plot_btn.clicked.connect(self.flat_field_plot_btn_clicked)
+        self.widget.flat_field_gb.toggled.connect(self.flat_field_gb_toggled)
 
         # transfer correction
         self.widget.transfer_load_original_btn.clicked.connect(
@@ -150,12 +167,63 @@ class CorrectionController(object):
         else:
             self.model.img_model.disable_transfer_function()
 
+    def flat_field_load_btn_clicked(self):
+        filename = open_file_dialog(
+            self.widget,
+            caption="Load Flat Field Image",
+            directory=self.model.working_directories["image"],
+        )
+        if filename != "":
+            self.widget.flat_field_filename_lbl.setText(
+                os.path.basename(filename)
+            )
+            self.model.img_model.flat_field_correction.load(filename)
+            self.widget.flat_field_gb.setChecked(True)
+            self.model.img_model.enable_flat_field()
+
+    def flat_field_plot_btn_clicked(self):
+        if self.widget.flat_field_plot_btn.isChecked():
+            flat_field_data = self.model.img_model.flat_field_correction.get_data()
+            if flat_field_data is not None:
+                self.widget.img_widget.plot_image(flat_field_data, auto_level=True)
+                self.widget.flat_field_plot_btn.setText("Back")
+            else:
+                self.widget.flat_field_plot_btn.setChecked(False)
+        else:
+            self.widget.flat_field_plot_btn.setText("Plot")
+            self.reset_img_widget()
+
+    def flat_field_gb_toggled(self):
+        if self.widget.flat_field_gb.isChecked():
+            self.model.img_model.enable_flat_field()
+        else:
+            self.model.img_model.disable_flat_field()
+
+    def update_flat_field_widgets(self):
+        filename = self.model.img_model.flat_field_correction.filename
+        if filename is not None:
+            self.widget.flat_field_filename_lbl.setText(
+                os.path.basename(filename)
+            )
+        else:
+            self.widget.flat_field_filename_lbl.setText("None")
+
     def corrections_removed(self):
         self.widget.cbn_groupbox.setChecked(False)
         self.widget.oiadac_groupbox.setChecked(False)
         self.widget.transfer_gb.setChecked(False)
         self.widget.transfer_original_filename_lbl.setText("None")
         self.widget.transfer_response_filename_lbl.setText("None")
+        self.widget.flat_field_gb.setChecked(False)
+        self.widget.flat_field_filename_lbl.setText("None")
+        self.widget.slab_groupbox.setChecked(False)
+        self.widget.slab_mu_lbl.setText("μ:")
+        self.widget.cylinder_groupbox.setChecked(False)
+        self.widget.cylinder_mu_lbl.setText("μ:")
+        self.widget.sphere_groupbox.setChecked(False)
+        self.widget.sphere_mu_lbl.setText("μ:")
+        self.widget.plate_groupbox.setChecked(False)
+        self.widget.plate_mu_lbl.setText("μ:")
         QtWidgets.QMessageBox.critical(
             self.widget,
             "Shape Mismatch",
@@ -175,22 +243,23 @@ class CorrectionController(object):
             return
 
         if self.widget.cbn_groupbox.isChecked():
-            diamond_thickness = self.widget.cbn_param_tw.cellWidget(0, 1).value()
-            seat_thickness = self.widget.cbn_param_tw.cellWidget(1, 1).value()
-            inner_seat_radius = self.widget.cbn_param_tw.cellWidget(2, 1).value()
-            outer_seat_radius = self.widget.cbn_param_tw.cellWidget(3, 1).value()
-            tilt = self.widget.cbn_param_tw.cellWidget(4, 1).value()
-            tilt_rotation = self.widget.cbn_param_tw.cellWidget(5, 1).value()
-            center_offset = self.widget.cbn_param_tw.cellWidget(6, 1).value()
-            center_offset_angle = self.widget.cbn_param_tw.cellWidget(7, 1).value()
-            seat_absorption_length = self.widget.cbn_param_tw.cellWidget(8, 1).value()
-            anvil_absorption_length = self.widget.cbn_param_tw.cellWidget(9, 1).value()
+            form = self.widget.cbn_param_form
+            diamond_thickness = form.value("anvil_thickness")
+            seat_thickness = form.value("seat_thickness")
+            inner_seat_radius = form.value("inner_seat_radius")
+            outer_seat_radius = form.value("outer_seat_radius")
+            tilt = form.value("cell_tilt")
+            tilt_rotation = form.value("cell_tilt_rotation")
+            center_offset = form.value("center_offset")
+            center_offset_angle = form.value("center_offset_rotation")
+            anvil_absorption_length = form.value("anvil_absorption_length")
+            seat_absorption_length = form.value("seat_absorption_length")
 
             tth_array = (
-                180.0 / np.pi * self.model.calibration_model.pattern_geometry.ttha
+                180.0 / np.pi * self.model.calibration_model.tth_array
             )
             azi_array = (
-                180.0 / np.pi * self.model.calibration_model.pattern_geometry.chia
+                180.0 / np.pi * self.model.calibration_model.azi_array
             )
 
             new_cbn_correction = CbnCorrection(
@@ -210,10 +279,9 @@ class CorrectionController(object):
             if not new_cbn_correction == self.model.img_model.get_img_correction("cbn"):
                 t1 = time.time()
                 new_cbn_correction.update()
-                print(
-                    "Time needed for correction calculation: {0}".format(
-                        time.time() - t1
-                    )
+                logger.info(
+                    "Time needed for cBN correction calculation: %.3fs",
+                    time.time() - t1,
                 )
                 try:
                     self.model.img_model.delete_img_correction("cbn")
@@ -231,34 +299,28 @@ class CorrectionController(object):
             )
             self.widget.cbn_plot_btn.setText("Back")
             self.widget.oiadac_plot_btn.setText("Plot")
+            self.widget.slab_plot_btn.setText("Plot")
+            self.widget.cylinder_plot_btn.setText("Plot")
+            self.widget.sphere_plot_btn.setText("Plot")
+            self.widget.plate_plot_btn.setText("Plot")
+            self.widget.flat_field_plot_btn.setText("Plot")
         else:
             self.widget.cbn_plot_btn.setText("Plot")
             self.reset_img_widget()
 
     def update_cbn_widgets(self):
         params = self.model.img_model.img_corrections.get_correction("cbn").get_params()
-        self.widget.cbn_param_tw.cellWidget(0, 1).setText(
-            str(params["diamond_thickness"])
-        )
-        self.widget.cbn_param_tw.cellWidget(1, 1).setText(str(params["seat_thickness"]))
-        self.widget.cbn_param_tw.cellWidget(2, 1).setText(
-            str(params["small_cbn_seat_radius"])
-        )
-        self.widget.cbn_param_tw.cellWidget(3, 1).setText(
-            str(params["large_cbn_seat_radius"])
-        )
-        self.widget.cbn_param_tw.cellWidget(4, 1).setText(str(params["tilt"]))
-        self.widget.cbn_param_tw.cellWidget(5, 1).setText(str(params["tilt_rotation"]))
-        self.widget.cbn_param_tw.cellWidget(6, 1).setText(
-            str(params["diamond_abs_length"])
-        )
-        self.widget.cbn_param_tw.cellWidget(7, 1).setText(
-            str(params["seat_abs_length"])
-        )
-        self.widget.cbn_param_tw.cellWidget(8, 1).setText(str(params["center_offset"]))
-        self.widget.cbn_param_tw.cellWidget(9, 1).setText(
-            str(params["center_offset_angle"])
-        )
+        form = self.widget.cbn_param_form
+        form.set_value("anvil_thickness", params["diamond_thickness"])
+        form.set_value("seat_thickness", params["seat_thickness"])
+        form.set_value("inner_seat_radius", params["small_cbn_seat_radius"])
+        form.set_value("outer_seat_radius", params["large_cbn_seat_radius"])
+        form.set_value("cell_tilt", params["tilt"])
+        form.set_value("cell_tilt_rotation", params["tilt_rotation"])
+        form.set_value("center_offset", params["center_offset"])
+        form.set_value("center_offset_rotation", params["center_offset_angle"])
+        form.set_value("anvil_absorption_length", params["diamond_abs_length"])
+        form.set_value("seat_absorption_length", params["seat_abs_length"])
         self.widget.cbn_groupbox.setChecked(True)
 
     def oiadac_groupbox_changed(self):
@@ -274,8 +336,8 @@ class CorrectionController(object):
             return
 
         if self.widget.oiadac_groupbox.isChecked():
-            detector_thickness = self.widget.oiadac_param_tw.cellWidget(0, 1).value()
-            absorption_length = self.widget.oiadac_param_tw.cellWidget(1, 1).value()
+            detector_thickness = self.widget.oiadac_param_form.value("detector_thickness")
+            absorption_length = self.widget.oiadac_param_form.value("detector_absorption_length")
 
             _, fit2d_parameter = (
                 self.model.calibration_model.get_calibration_parameter()
@@ -283,8 +345,8 @@ class CorrectionController(object):
             detector_tilt = fit2d_parameter["tilt"]
             detector_tilt_rotation = fit2d_parameter["tiltPlanRotation"]
 
-            tth_array = self.model.calibration_model.pattern_geometry.ttha
-            azi_array = self.model.calibration_model.pattern_geometry.chia
+            tth_array = self.model.calibration_model.tth_array
+            azi_array = self.model.calibration_model.azi_array
             import time
 
             t1 = time.time()
@@ -297,8 +359,9 @@ class CorrectionController(object):
                 tilt=detector_tilt,
                 rotation=detector_tilt_rotation,
             )
-            print(
-                "Time needed for correction calculation: {0}".format(time.time() - t1)
+            logger.info(
+                "Time needed for OIADAC correction calculation: %.3fs",
+                time.time() - t1,
             )
             try:
                 self.model.img_model.delete_img_correction("oiadac")
@@ -318,27 +381,415 @@ class CorrectionController(object):
             )
             self.widget.oiadac_plot_btn.setText("Back")
             self.widget.cbn_plot_btn.setText("Plot")
+            self.widget.slab_plot_btn.setText("Plot")
+            self.widget.cylinder_plot_btn.setText("Plot")
+            self.widget.sphere_plot_btn.setText("Plot")
+            self.widget.plate_plot_btn.setText("Plot")
+            self.widget.flat_field_plot_btn.setText("Plot")
         else:
             self.widget.oiadac_plot_btn.setText("Plot")
             self.reset_img_widget()
 
     def reset_img_widget(self):
-        if self.widget.img_mode == "Cake":
+        if self.model.view.img_mode == "Cake":
             self.model.cake_changed.emit()
-        elif self.widget.img_mode == "Image":
+        elif self.model.view.img_mode == "Image":
             self.model.img_changed.emit()
+
+    def update_slab_widgets(self):
+        correction = self.model.img_model.img_corrections.get_correction("slab")
+        if correction is None:
+            return
+        params = correction.get_params()
+        self.widget.slab_param_form.set_value("thickness", params["thickness"])
+        self.widget.slab_param_form.set_value("slab_tilt", params["slab_tilt"])
+        self.widget.slab_param_form.set_value("slab_rotation", params["slab_rotation"])
+        mu = params["absorption_coefficient"]
+        self.widget.slab_mu_lbl.setText(f"μ: {mu:.4f} 1/mm")
+        self.widget.slab_groupbox.setChecked(True)
 
     def update_oiadac_widgets(self):
         params = self.model.img_model.img_corrections.get_correction(
             "oiadac"
         ).get_params()
-        self.widget.oiadac_param_tw.cellWidget(0, 1).setText(
-            str(params["detector_thickness"])
+        self.widget.oiadac_param_form.set_value(
+            "detector_thickness", params["detector_thickness"]
         )
-        self.widget.oiadac_param_tw.cellWidget(1, 1).setText(
-            str(params["absorption_length"])
+        self.widget.oiadac_param_form.set_value(
+            "detector_absorption_length", params["absorption_length"]
         )
         self.widget.oiadac_groupbox.setChecked(True)
+
+    def slab_groupbox_changed(self):
+        if not self.model.calibration_model.is_calibrated:
+            self.widget.slab_groupbox.setChecked(False)
+            QtWidgets.QMessageBox.critical(
+                self.widget,
+                "ERROR",
+                "Please calibrate the geometry first or load an existent calibration file. "
+                + "The slab absorption correction needs a calibrated geometry.",
+            )
+            return
+
+        if self.widget.slab_groupbox.isChecked():
+            formula = self.widget.slab_formula_txt.text().strip()
+            if not formula:
+                self.widget.slab_groupbox.setChecked(False)
+                return
+
+            density = self.widget.slab_param_form.value("density")
+            thickness = self.widget.slab_param_form.value("thickness")
+            slab_tilt = self.widget.slab_param_form.value("slab_tilt")
+            slab_rotation = self.widget.slab_param_form.value("slab_rotation")
+
+            # Calculate mu from formula + density + wavelength
+            wavelength_m = self.model.calibration_model.wavelength
+            energy_eV = wavelength_to_energy(wavelength_m)
+            try:
+                mu = calculate_mu(formula, energy_eV, density=density if density > 0 else None)
+            except Exception as e:
+                self.widget.slab_groupbox.setChecked(False)
+                self.widget.slab_mu_lbl.setText("μ:")
+                QtWidgets.QMessageBox.critical(
+                    self.widget,
+                    "Invalid Formula",
+                    f"Could not calculate absorption coefficient:\n{e}",
+                )
+                return
+
+            self.widget.slab_mu_lbl.setText(f"μ: {mu:.4f} 1/mm")
+
+            tth_array = 180.0 / np.pi * self.model.calibration_model.tth_array
+            azi_array = 180.0 / np.pi * self.model.calibration_model.azi_array
+
+            new_correction = SlabAbsorptionCorrection(
+                tth_array=tth_array,
+                azi_array=azi_array,
+                thickness=thickness,
+                absorption_coefficient=mu,
+                slab_tilt=slab_tilt,
+                slab_rotation=slab_rotation,
+            )
+            new_correction.update()
+            try:
+                self.model.img_model.delete_img_correction("slab")
+            except KeyError:
+                pass
+            self.model.img_model.add_img_correction(new_correction, "slab")
+        else:
+            try:
+                self.model.img_model.delete_img_correction("slab")
+            except KeyError:
+                pass
+            self.widget.slab_mu_lbl.setText("μ:")
+
+    def slab_plot_btn_clicked(self):
+        if str(self.widget.slab_plot_btn.text()) == "Plot":
+            correction = self.model.img_model.img_corrections.get_correction("slab")
+            if correction is not None:
+                self.widget.img_widget.plot_image(correction.get_data(), True)
+                self.widget.slab_plot_btn.setText("Back")
+                self.widget.cbn_plot_btn.setText("Plot")
+                self.widget.oiadac_plot_btn.setText("Plot")
+                self.widget.cylinder_plot_btn.setText("Plot")
+                self.widget.sphere_plot_btn.setText("Plot")
+                self.widget.plate_plot_btn.setText("Plot")
+                self.widget.flat_field_plot_btn.setText("Plot")
+            else:
+                self.widget.slab_plot_btn.setChecked(False)
+        else:
+            self.widget.slab_plot_btn.setText("Plot")
+            self.reset_img_widget()
+
+    def cylinder_groupbox_changed(self):
+        if not self.model.calibration_model.is_calibrated:
+            self.widget.cylinder_groupbox.setChecked(False)
+            QtWidgets.QMessageBox.critical(
+                self.widget,
+                "ERROR",
+                "Please calibrate the geometry first or load an existent calibration file. "
+                + "The cylinder absorption correction needs a calibrated geometry.",
+            )
+            return
+
+        if self.widget.cylinder_groupbox.isChecked():
+            formula = self.widget.cylinder_formula_txt.text().strip()
+            if not formula:
+                self.widget.cylinder_groupbox.setChecked(False)
+                return
+
+            density = self.widget.cylinder_param_form.value("density")
+            radius = self.widget.cylinder_param_form.value("radius")
+            axis_tilt = self.widget.cylinder_param_form.value("axis_tilt")
+            axis_rotation = self.widget.cylinder_param_form.value("axis_rotation")
+            beam_width = self.widget.cylinder_param_form.value("beam_width")
+
+            wavelength_m = self.model.calibration_model.wavelength
+            energy_eV = wavelength_to_energy(wavelength_m)
+            try:
+                mu = calculate_mu(formula, energy_eV, density=density if density > 0 else None)
+            except Exception as e:
+                self.widget.cylinder_groupbox.setChecked(False)
+                self.widget.cylinder_mu_lbl.setText("μ:")
+                QtWidgets.QMessageBox.critical(
+                    self.widget, "Invalid Formula",
+                    f"Could not calculate absorption coefficient:\n{e}",
+                )
+                return
+
+            # Container parameters
+            container_formula = self.widget.cylinder_container_formula_txt.text().strip()
+            mu_container = 0
+            wall_thickness = self.widget.cylinder_container_param_form.value("wall_thickness")
+            if container_formula and wall_thickness > 0:
+                container_density = self.widget.cylinder_container_param_form.value("container_density")
+                try:
+                    mu_container = calculate_mu(
+                        container_formula, energy_eV,
+                        density=container_density if container_density > 0 else None,
+                    )
+                except Exception:
+                    mu_container = 0
+
+            self.widget.cylinder_mu_lbl.setText(f"μ: {mu:.4f} 1/mm")
+
+            tth_array = 180.0 / np.pi * self.model.calibration_model.tth_array
+            azi_array = 180.0 / np.pi * self.model.calibration_model.azi_array
+
+            new_correction = CylinderAbsorptionCorrection(
+                tth_array=tth_array,
+                azi_array=azi_array,
+                radius=radius,
+                absorption_coefficient=mu,
+                axis_tilt=axis_tilt,
+                axis_rotation=axis_rotation,
+                beam_width=beam_width,
+                container_absorption_coefficient=mu_container,
+                wall_thickness=wall_thickness,
+            )
+            new_correction.update()
+            try:
+                self.model.img_model.delete_img_correction("cylinder")
+            except KeyError:
+                pass
+            self.model.img_model.add_img_correction(new_correction, "cylinder")
+        else:
+            try:
+                self.model.img_model.delete_img_correction("cylinder")
+            except KeyError:
+                pass
+            self.widget.cylinder_mu_lbl.setText("μ:")
+
+    def cylinder_plot_btn_clicked(self):
+        if str(self.widget.cylinder_plot_btn.text()) == "Plot":
+            correction = self.model.img_model.img_corrections.get_correction("cylinder")
+            if correction is not None:
+                self.widget.img_widget.plot_image(correction.get_data(), True)
+                self.widget.cylinder_plot_btn.setText("Back")
+                self.widget.cbn_plot_btn.setText("Plot")
+                self.widget.oiadac_plot_btn.setText("Plot")
+                self.widget.slab_plot_btn.setText("Plot")
+                self.widget.sphere_plot_btn.setText("Plot")
+                self.widget.plate_plot_btn.setText("Plot")
+                self.widget.flat_field_plot_btn.setText("Plot")
+            else:
+                self.widget.cylinder_plot_btn.setChecked(False)
+        else:
+            self.widget.cylinder_plot_btn.setText("Plot")
+            self.reset_img_widget()
+
+    def update_cylinder_widgets(self):
+        correction = self.model.img_model.img_corrections.get_correction("cylinder")
+        if correction is None:
+            return
+        params = correction.get_params()
+        self.widget.cylinder_param_form.set_value("radius", params["radius"])
+        self.widget.cylinder_param_form.set_value("axis_tilt", params["axis_tilt"])
+        self.widget.cylinder_param_form.set_value("axis_rotation", params["axis_rotation"])
+        self.widget.cylinder_param_form.set_value("beam_width", params["beam_width"])
+        mu = params["absorption_coefficient"]
+        self.widget.cylinder_mu_lbl.setText(f"μ: {mu:.4f} 1/mm")
+        self.widget.cylinder_groupbox.setChecked(True)
+
+    def sphere_groupbox_changed(self):
+        if not self.model.calibration_model.is_calibrated:
+            self.widget.sphere_groupbox.setChecked(False)
+            QtWidgets.QMessageBox.critical(
+                self.widget,
+                "ERROR",
+                "Please calibrate the geometry first or load an existent calibration file. "
+                + "The sphere absorption correction needs a calibrated geometry.",
+            )
+            return
+
+        if self.widget.sphere_groupbox.isChecked():
+            formula = self.widget.sphere_formula_txt.text().strip()
+            if not formula:
+                self.widget.sphere_groupbox.setChecked(False)
+                return
+
+            density = self.widget.sphere_param_form.value("density")
+            radius = self.widget.sphere_param_form.value("radius")
+            beam_width = self.widget.sphere_param_form.value("beam_width")
+
+            wavelength_m = self.model.calibration_model.wavelength
+            energy_eV = wavelength_to_energy(wavelength_m)
+            try:
+                mu = calculate_mu(formula, energy_eV, density=density if density > 0 else None)
+            except Exception as e:
+                self.widget.sphere_groupbox.setChecked(False)
+                self.widget.sphere_mu_lbl.setText("μ:")
+                QtWidgets.QMessageBox.critical(
+                    self.widget, "Invalid Formula",
+                    f"Could not calculate absorption coefficient:\n{e}",
+                )
+                return
+
+            self.widget.sphere_mu_lbl.setText(f"μ: {mu:.4f} 1/mm")
+
+            tth_array = 180.0 / np.pi * self.model.calibration_model.tth_array
+            azi_array = 180.0 / np.pi * self.model.calibration_model.azi_array
+
+            new_correction = SphereAbsorptionCorrection(
+                tth_array=tth_array,
+                azi_array=azi_array,
+                radius=radius,
+                absorption_coefficient=mu,
+                beam_width=beam_width,
+            )
+            new_correction.update()
+            try:
+                self.model.img_model.delete_img_correction("sphere")
+            except KeyError:
+                pass
+            self.model.img_model.add_img_correction(new_correction, "sphere")
+        else:
+            try:
+                self.model.img_model.delete_img_correction("sphere")
+            except KeyError:
+                pass
+            self.widget.sphere_mu_lbl.setText("μ:")
+
+    def sphere_plot_btn_clicked(self):
+        if str(self.widget.sphere_plot_btn.text()) == "Plot":
+            correction = self.model.img_model.img_corrections.get_correction("sphere")
+            if correction is not None:
+                self.widget.img_widget.plot_image(correction.get_data(), True)
+                self.widget.sphere_plot_btn.setText("Back")
+                self.widget.cbn_plot_btn.setText("Plot")
+                self.widget.oiadac_plot_btn.setText("Plot")
+                self.widget.slab_plot_btn.setText("Plot")
+                self.widget.cylinder_plot_btn.setText("Plot")
+                self.widget.plate_plot_btn.setText("Plot")
+                self.widget.flat_field_plot_btn.setText("Plot")
+            else:
+                self.widget.sphere_plot_btn.setChecked(False)
+        else:
+            self.widget.sphere_plot_btn.setText("Plot")
+            self.reset_img_widget()
+
+    def update_sphere_widgets(self):
+        correction = self.model.img_model.img_corrections.get_correction("sphere")
+        if correction is None:
+            return
+        params = correction.get_params()
+        self.widget.sphere_param_form.set_value("radius", params["radius"])
+        self.widget.sphere_param_form.set_value("beam_width", params["beam_width"])
+        mu = params["absorption_coefficient"]
+        self.widget.sphere_mu_lbl.setText(f"μ: {mu:.4f} 1/mm")
+        self.widget.sphere_groupbox.setChecked(True)
+
+    def plate_groupbox_changed(self):
+        if not self.model.calibration_model.is_calibrated:
+            self.widget.plate_groupbox.setChecked(False)
+            QtWidgets.QMessageBox.critical(
+                self.widget,
+                "ERROR",
+                "Please calibrate the geometry first or load an existent calibration file. "
+                + "The plate absorption correction needs a calibrated geometry.",
+            )
+            return
+
+        if self.widget.plate_groupbox.isChecked():
+            formula = self.widget.plate_formula_txt.text().strip()
+            if not formula:
+                self.widget.plate_groupbox.setChecked(False)
+                return
+
+            density = self.widget.plate_param_form.value("density")
+            thickness = self.widget.plate_param_form.value("thickness")
+            plate_tilt = self.widget.plate_param_form.value("plate_tilt")
+            plate_rotation = self.widget.plate_param_form.value("plate_rotation")
+
+            wavelength_m = self.model.calibration_model.wavelength
+            energy_eV = wavelength_to_energy(wavelength_m)
+            try:
+                mu = calculate_mu(formula, energy_eV, density=density if density > 0 else None)
+            except Exception as e:
+                self.widget.plate_groupbox.setChecked(False)
+                self.widget.plate_mu_lbl.setText("μ:")
+                QtWidgets.QMessageBox.critical(
+                    self.widget,
+                    "Invalid Formula",
+                    f"Could not calculate absorption coefficient:\n{e}",
+                )
+                return
+
+            self.widget.plate_mu_lbl.setText(f"μ: {mu:.4f} 1/mm")
+
+            tth_array = 180.0 / np.pi * self.model.calibration_model.tth_array
+            azi_array = 180.0 / np.pi * self.model.calibration_model.azi_array
+
+            new_correction = PlateAbsorptionCorrection(
+                tth_array=tth_array,
+                azi_array=azi_array,
+                thickness=thickness,
+                absorption_coefficient=mu,
+                plate_tilt=plate_tilt,
+                plate_rotation=plate_rotation,
+            )
+            new_correction.update()
+            try:
+                self.model.img_model.delete_img_correction("plate")
+            except KeyError:
+                pass
+            self.model.img_model.add_img_correction(new_correction, "plate")
+        else:
+            try:
+                self.model.img_model.delete_img_correction("plate")
+            except KeyError:
+                pass
+            self.widget.plate_mu_lbl.setText("μ:")
+
+    def plate_plot_btn_clicked(self):
+        if str(self.widget.plate_plot_btn.text()) == "Plot":
+            correction = self.model.img_model.img_corrections.get_correction("plate")
+            if correction is not None:
+                self.widget.img_widget.plot_image(correction.get_data(), True)
+                self.widget.plate_plot_btn.setText("Back")
+                self.widget.cbn_plot_btn.setText("Plot")
+                self.widget.oiadac_plot_btn.setText("Plot")
+                self.widget.slab_plot_btn.setText("Plot")
+                self.widget.cylinder_plot_btn.setText("Plot")
+                self.widget.sphere_plot_btn.setText("Plot")
+                self.widget.flat_field_plot_btn.setText("Plot")
+            else:
+                self.widget.plate_plot_btn.setChecked(False)
+        else:
+            self.widget.plate_plot_btn.setText("Plot")
+            self.reset_img_widget()
+
+    def update_plate_widgets(self):
+        correction = self.model.img_model.img_corrections.get_correction("plate")
+        if correction is None:
+            return
+        params = correction.get_params()
+        self.widget.plate_param_form.set_value("thickness", params["thickness"])
+        self.widget.plate_param_form.set_value("plate_tilt", params["plate_tilt"])
+        self.widget.plate_param_form.set_value("plate_rotation", params["plate_rotation"])
+        mu = params["absorption_coefficient"]
+        self.widget.plate_mu_lbl.setText(f"μ: {mu:.4f} 1/mm")
+        self.widget.plate_groupbox.setChecked(True)
 
     def reset_plot_btns(self):
         self.widget.oiadac_plot_btn.setText("Plot")
@@ -347,28 +798,66 @@ class CorrectionController(object):
         self.widget.cbn_plot_btn.setChecked(False)
         self.widget.transfer_plot_btn.setText("Plot")
         self.widget.transfer_plot_btn.setChecked(False)
+        self.widget.slab_plot_btn.setText("Plot")
+        self.widget.slab_plot_btn.setChecked(False)
+        self.widget.cylinder_plot_btn.setText("Plot")
+        self.widget.cylinder_plot_btn.setChecked(False)
+        self.widget.sphere_plot_btn.setText("Plot")
+        self.widget.sphere_plot_btn.setChecked(False)
+        self.widget.plate_plot_btn.setText("Plot")
+        self.widget.plate_plot_btn.setChecked(False)
+        self.widget.flat_field_plot_btn.setText("Plot")
+        self.widget.flat_field_plot_btn.setChecked(False)
 
     def update_gui(self):
         if self.model.img_model.get_img_correction("cbn") is not None:
             self.update_cbn_widgets()
-            self.widget.cbn_groupbox.blockSignals(True)
             self.widget.cbn_groupbox.setChecked(True)
-            self.widget.cbn_groupbox.blockSignals(False)
         else:
             self.widget.cbn_groupbox.setChecked(False)
 
         if self.model.img_model.get_img_correction("oiadac") is not None:
             self.update_oiadac_widgets()
-            self.widget.oiadac_groupbox.blockSignals(True)
             self.widget.oiadac_groupbox.setChecked(True)
-            self.widget.oiadac_groupbox.blockSignals(False)
         else:
             self.widget.oiadac_groupbox.setChecked(False)
 
         if self.model.img_model.get_img_correction("transfer") is not None:
             self.update_transfer_widgets()
-            # self.widget.transfer_gb.blockSignals(True)
             self.widget.transfer_gb.setChecked(True)
-            # self.widget.transfer_gb.blockSignals(False)
         else:
             self.widget.transfer_gb.setChecked(False)
+
+        if self.model.img_model.get_img_correction("slab") is not None:
+            self.update_slab_widgets()
+            self.widget.slab_groupbox.setChecked(True)
+        else:
+            self.widget.slab_groupbox.setChecked(False)
+            self.widget.slab_mu_lbl.setText("μ:")
+
+        if self.model.img_model.get_img_correction("cylinder") is not None:
+            self.update_cylinder_widgets()
+            self.widget.cylinder_groupbox.setChecked(True)
+        else:
+            self.widget.cylinder_groupbox.setChecked(False)
+            self.widget.cylinder_mu_lbl.setText("μ:")
+
+        if self.model.img_model.get_img_correction("sphere") is not None:
+            self.update_sphere_widgets()
+            self.widget.sphere_groupbox.setChecked(True)
+        else:
+            self.widget.sphere_groupbox.setChecked(False)
+            self.widget.sphere_mu_lbl.setText("μ:")
+
+        if self.model.img_model.get_img_correction("plate") is not None:
+            self.update_plate_widgets()
+            self.widget.plate_groupbox.setChecked(True)
+        else:
+            self.widget.plate_groupbox.setChecked(False)
+            self.widget.plate_mu_lbl.setText("μ:")
+
+        if self.model.img_model.get_img_correction("flat_field") is not None:
+            self.update_flat_field_widgets()
+            self.widget.flat_field_gb.setChecked(True)
+        else:
+            self.widget.flat_field_gb.setChecked(False)

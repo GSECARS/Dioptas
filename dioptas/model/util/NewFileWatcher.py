@@ -1,40 +1,32 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
+from __future__ import annotations
+
+import logging
 import os
-import time
 import threading
-
-import queue
-
-from qtpy import QtCore
-
-from watchdog.observers import Observer
-from watchdog.events import PatternMatchingEventHandler
 
 from . import Signal
 
+logger = logging.getLogger(__name__)
 
-class NewFileInDirectoryWatcher(QtCore.QObject):
+
+class NewFileInDirectoryWatcher:
     """
-    This class watches a given filepath for any new files with a given file extension added to it.
+    This class watches a given filepath for any new files with a given file
+    extension added to it.
+
+    It polls the directory instead of subscribing to OS file events on
+    purpose: inotify (Linux) and FSEvents (macOS) only report changes made
+    through the local kernel. At a beamline the detector server writes to
+    network storage and Dioptas reads a client mount, where such events never
+    arrive at all — while a fresh directory listing sees the new file on any
+    filesystem.
+
+    A new file is announced only once its size and modification time have
+    stayed the same over two consecutive polls and it is not empty, so a file
+    still being written — network filesystems flush in bursts — is left alone
+    until the writer is done.
 
     Typical usage::
         def callback_fcn(path):
@@ -45,116 +37,159 @@ class NewFileInDirectoryWatcher(QtCore.QObject):
 
     """
 
-    _file_added_qt = QtCore.Signal(
-        str
-    )  # used internally for inside of an qt application to avoid thread problems
-
-    def __init__(self, path=None, file_types=None, activate=False):
+    def __init__(
+        self,
+        path: str | os.PathLike | None = None,
+        file_types: list[str] | None = None,
+        activate: bool = False,
+        poll_interval: float = 1.0,
+    ) -> None:
         """
         :param path: path to folder which will be watched
         :param file_types: list of file types which will be watched for, e.g. ['.tif', '.jpeg']
         :param activate: whether the Watcher will already emit signals
+        :param poll_interval: seconds between two looks at the directory
         """
-        super(NewFileInDirectoryWatcher, self).__init__()
-
         if path is None:
             path = os.getcwd()
-        self._path = path
+        self._path: str = str(path)
 
-        if file_types is None:
-            self.file_types = set([])
-            self.patterns = "*"
-        else:
-            self.file_types = set(file_types)
-            self.patterns = ["*." + file_type for file_type in file_types]
+        self.file_types: set[str] = set(file_types) if file_types else set()
+        self.poll_interval: float = poll_interval
 
-        self.event_handler = PatternMatchingEventHandler(patterns=self.patterns)
-        self.event_handler.on_created = self.on_file_created
+        self.file_added: Signal = Signal(str)  # to be used signal from outside
 
-        self.active = False
+        self.active: bool = False
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        # files already announced (or present before watching started) and
+        # files seen once but not yet stable, with their (size, mtime)
+        self._known: set[str] = set()
+        self._pending: dict[str, tuple[int, float]] = {}
+
         if activate:
             self.activate()
 
-        self.file_added = Signal(str)  # to be used signal from outside
-        self._file_added_qt.connect(self.file_added.emit)
-        self.filepath_queue = queue.Queue()
-
-    def on_file_created(self, event):
-        """
-        Called when a new file is created in the watched directory. This function will be called by the watchdog
-        event handle. We check whether the file is fully written by observing whether the file size changes. If the
-        file size is not changing within 10ms, we assume that the file is fully written and emit the file_added signal.
-        """
-        print("New file detected: {}".format(event.src_path))
-        file_path = os.path.abspath(event.src_path)
-        try:
-            file_size = os.stat(file_path).st_size
-        except FileNotFoundError:
-            return
-        while True:
-            try:
-                new_size = os.stat(file_path).st_size
-            except FileNotFoundError:
-                return
-            if new_size == file_size:
-                break
-            file_size = new_size
-            time.sleep(0.01)
-
-        self.filepath_queue.put(os.path.abspath(file_path))
-
-    def activate(self):
-        if not self.active:
-            self.active = True
-            self.queue_thread = threading.Thread(
-                target=self.process_events, daemon=True
-            )
-            self.queue_thread.start()
-            self._start_observing()
-
-    def deactivate(self):
+    def activate(self) -> None:
         if self.active:
-            self.active = False
-            self._stop_observing()
-            self.queue_thread.join()
+            return
+        self.active = True
+        self._stop_event.clear()
+        with self._lock:
+            self._take_baseline()
+        self._poll_thread: threading.Thread = threading.Thread(
+            target=self._poll_loop, daemon=True
+        )
+        self._poll_thread.start()
 
-    def _start_observing(self):
-        self.observer = Observer()
-        self.observer.schedule(self.event_handler, self.path)
-        self.observer.start()
-
-    def _stop_observing(self):
-        if self.observer.is_alive():
-            self.observer.stop()
-            self.observer.join()
+    def deactivate(self) -> None:
+        if not self.active:
+            return
+        self.active = False
+        self._stop_event.set()
+        # file_added handlers run on the poll thread; one of them turning
+        # the watcher off must not join the very thread it runs on
+        if threading.current_thread() is not self._poll_thread:
+            self._poll_thread.join()
 
     @property
-    def path(self):
+    def path(self) -> str:
         return self._path
 
     @path.setter
-    def path(self, new_path):
-        if self.active:
-            self._stop_observing()
-        self._path = new_path
-        if self.active:
-            self._start_observing()
+    def path(self, new_path: str | os.PathLike) -> None:
+        with self._lock:
+            self._path = str(new_path)
+            # only files added from now on count, as for the initial path
+            self._take_baseline()
 
-    def process_events(self):
-        """continuously check for new files and emit the file_added signal"""
-        while self.active:
-            try:
-                file_path = self.filepath_queue.get(False)  # doesn't block
-            except queue.Empty:  # raised when the queue is empty
-                time.sleep(0.05)
-                continue
+    def _poll_loop(self) -> None:
+        # Event.wait doubles as an interruptible sleep, so deactivate() never
+        # has to wait out a full interval
+        while not self._stop_event.wait(self.poll_interval):
+            self.poll_once()
 
-            if QtCore.QCoreApplication.instance() is not None:
-                self._file_added_qt.emit(file_path)
-            else:
-                self.file_added.emit(file_path)
+    def poll_once(self) -> None:
+        """One look at the directory; called repeatedly by the poll thread.
 
-    def __del__(self):
-        """Stop the observer thread when the object is deleted."""
-        self.deactivate()
-        self.file_added.clear()
+        Emits file_added for every file that appeared since watching started
+        and has finished being written (stats unchanged since the last look).
+        """
+        with self._lock:
+            entries = self._scan()
+            if entries is None:
+                return
+
+            # a vanished file may be re-created later; that counts as new again
+            self._known &= set(entries)
+            for name in list(self._pending):
+                if name not in entries:
+                    del self._pending[name]
+
+            ready: list[tuple[float, str]] = []
+            for name, file_stat in entries.items():
+                if name in self._known:
+                    continue
+                if self._pending.get(name) == file_stat and file_stat[0] > 0:
+                    ready.append((file_stat[1], name))
+                    self._known.add(name)
+                    del self._pending[name]
+                else:
+                    self._pending[name] = file_stat
+
+            new_file_paths = [
+                os.path.abspath(os.path.join(self._path, name))
+                for _, name in sorted(ready)
+            ]
+
+        # emitted outside the lock so a handler may touch the watcher
+        for file_path in new_file_paths:
+            logger.info("New file detected: %s", file_path)
+            self.file_added.emit(file_path)
+
+    def _scan(self) -> dict[str, tuple[int, float]] | None:
+        """Lists the matching files with their (size, mtime).
+
+        Opens the directory fresh each time — this is also what defeats the
+        NFS attribute cache. Returns None if the directory cannot be read.
+        """
+        try:
+            with os.scandir(self._path) as dir_iterator:
+                entries: dict[str, tuple[int, float]] = {}
+                for entry in dir_iterator:
+                    if not self._matches(entry.name):
+                        continue
+                    try:
+                        if not entry.is_file():
+                            continue
+                        file_stat = entry.stat()
+                    except OSError:
+                        continue
+                    entries[entry.name] = (file_stat.st_size, file_stat.st_mtime)
+                return entries
+        except OSError:
+            logger.debug("Cannot list watched directory: %s", self._path)
+            return None
+
+    def _matches(self, filename: str) -> bool:
+        if not self.file_types:
+            return True
+        lowered = filename.lower()
+        return any(
+            lowered.endswith("." + file_type.lower().lstrip("."))
+            for file_type in self.file_types
+        )
+
+    def _take_baseline(self) -> None:
+        """Remembers the files already there, which are never announced."""
+        entries = self._scan()
+        self._known = set(entries) if entries else set()
+        self._pending = {}
+
+    def __del__(self) -> None:
+        """Stop the poll thread when the object is deleted."""
+        try:
+            self.deactivate()
+            self.file_added.clear()
+        except Exception:
+            pass

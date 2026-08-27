@@ -1,22 +1,4 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 import os
 
@@ -25,13 +7,16 @@ from qtpy import QtWidgets, QtCore
 
 from ...widgets.UtilityWidgets import save_file_dialog, open_file_dialog
 from ...model.util.calc import convert_units
+from ...model.util.file_type import FileLoadingError
 
 # imports for type hinting in PyCharm -- DO NOT DELETE
 from ...model.DioptasModel import DioptasModel
 from ...widgets.integration import IntegrationWidget
 
+from ..binding import Binder
 
-class PatternController(object):
+
+class PatternController:
     """
     IntegrationPatternController handles all the interaction from the IntegrationView with the pattern data.
     It manages the auto integration of image files to  in addition to pattern browsing and changing of units
@@ -49,17 +34,18 @@ class PatternController(object):
 
         self.widget = widget
         self.model = dioptas_model
-
-        self.integration_unit = "2th_deg"
-        self.autocreate_pattern = False
+        self.binder = Binder(field_events=self.model.configuration_params_changed)
 
         self.create_subscriptions()
         self.create_gui_signals()
+        self.binder.refresh()
 
     def create_subscriptions(self):
         # Data subscriptions
         self.model.pattern_changed.connect(self.plot_pattern)
         self.model.configuration_selected.connect(self.update_gui)
+        self.model.integration_unit_changed.connect(self._integration_unit_changed)
+        self.binder.connect_refresh(self.model.configuration_selected)
 
         # Gui subscriptions
         # self.widget.img_widget.roi.sigRegionChangeFinished.connect(self.image_changed)
@@ -73,7 +59,11 @@ class PatternController(object):
         """
 
         # file callbacks
-        self.widget.pattern_autocreate_cb.clicked.connect(self.autocreate_cb_changed)
+        self.binder.bind_checkbox(
+            self.widget.pattern_autocreate_cb,
+            lambda: self.model.current_configuration,
+            "auto_save_integrated_pattern",
+        )
         self.widget.pattern_load_btn.clicked.connect(self.load)
         self.widget.pattern_previous_btn.clicked.connect(self.load_previous)
         self.widget.pattern_next_btn.clicked.connect(self.load_next)
@@ -95,15 +85,11 @@ class PatternController(object):
             self.pattern_directory_txt_changed
         )
 
-        # unit callbacks
+        # unit callbacks (the batch view's unit buttons are owned by
+        # BatchController; both write the same model property)
         self.widget.pattern_tth_btn.clicked.connect(self.set_unit_tth)
         self.widget.pattern_q_btn.clicked.connect(self.set_unit_q)
         self.widget.pattern_d_btn.clicked.connect(self.set_unit_d)
-        self.widget.batch_widget.options_widget.tth_btn.clicked.connect(
-            self.set_unit_tth
-        )
-        self.widget.batch_widget.options_widget.q_btn.clicked.connect(self.set_unit_q)
-        self.widget.batch_widget.options_widget.d_btn.clicked.connect(self.set_unit_d)
 
         # quick actions
         self.widget.qa_save_pattern_btn.clicked.connect(self.save_pattern)
@@ -133,8 +119,17 @@ class PatternController(object):
             self.widget.pattern_widget.set_antialias
         )
 
+        # pattern_plot y-scale toggles
+        self.widget.pattern_log_btn.clicked.connect(self._y_scale_log_clicked)
+        self.widget.pattern_sqrt_btn.clicked.connect(self._y_scale_sqrt_clicked)
+
         self.widget.pattern_header_xy_cb.clicked.connect(
             self.update_pattern_file_endings
+        )
+        self.widget.pattern_header_xye_cb.clicked.connect(
+            lambda checked: self._error_file_format_clicked(
+                self.widget.pattern_header_xye_cb, checked
+            )
         )
         self.widget.pattern_header_chi_cb.clicked.connect(
             self.update_pattern_file_endings
@@ -143,13 +138,17 @@ class PatternController(object):
             self.update_pattern_file_endings
         )
         self.widget.pattern_header_fxye_cb.clicked.connect(
-            self.update_pattern_file_endings
+            lambda checked: self._error_file_format_clicked(
+                self.widget.pattern_header_fxye_cb, checked
+            )
         )
 
     def update_pattern_file_endings(self):
         res = []
         if self.widget.pattern_header_xy_cb.isChecked():
             res.append(".xy")
+        if self.widget.pattern_header_xye_cb.isChecked():
+            res.append(".xye")
         if self.widget.pattern_header_chi_cb.isChecked():
             res.append(".chi")
         if self.widget.pattern_header_dat_cb.isChecked():
@@ -157,6 +156,50 @@ class PatternController(object):
         if self.widget.pattern_header_fxye_cb.isChecked():
             res.append(".fxye")
         self.model.current_configuration.integrated_patterns_file_formats = res
+
+    def _error_file_format_clicked(self, checkbox, checked):
+        if checked and not self._ensure_poisson_errors():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(False)
+            checkbox.blockSignals(False)
+        self.update_pattern_file_endings()
+
+    def _ensure_poisson_errors(self) -> bool:
+        configuration = self.model.current_configuration
+        if (
+            configuration.calculate_poisson_errors
+            and self.model.pattern_model.errors is not None
+        ):
+            return True
+
+        if (
+            self.model.pattern_model.pattern_source != "integrated"
+            or not configuration.is_calibrated
+            or not self.model.img_model.filename
+        ):
+            self.widget.show_error_msg(
+                "Poisson errors can only be calculated for an integrated image."
+            )
+            return False
+
+        answer = QtWidgets.QMessageBox.question(
+            self.widget,
+            "Calculate Poisson errors?",
+            "The current pattern has no calculated errors. Enable Poisson "
+            "error calculation and reintegrate it now?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel,
+            QtWidgets.QMessageBox.Yes,
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
+            return False
+
+        # Changing the option normally triggers automatic integration. Hold
+        # that reaction so this explicit request performs exactly one pass,
+        # even when automatic integration is enabled.
+        with configuration.pattern_integration.hold(flush=False):
+            configuration.calculate_poisson_errors = True
+        configuration.integrate_image_1d()
+        return self.model.pattern_model.errors is not None
 
     def plot_pattern(self):
         if self.widget.bkg_pattern_inspect_btn.isChecked():
@@ -217,16 +260,20 @@ class PatternController(object):
                 self.model.working_directories["pattern"], img_filename + ".xy"
             ),
             (
-                "Data (*.xy);;Data (*.chi);;Data (*.dat);;GSAS (*.fxye);;png (*.png);;svg (*.svg)"
+                "Data (*.xy);;Data with errors (*.xye);;Data (*.chi);;Data (*.dat);;GSAS with errors (*.fxye);;png (*.png);;svg (*.svg)"
             ),
         )
 
         if filename != "":
+            self.model.working_directories["pattern"] = os.path.dirname(filename)
             if filename.endswith(".png"):
                 self.widget.pattern_widget.save_png(filename)
             elif filename.endswith(".svg"):
                 self.widget.pattern_widget.save_svg(filename)
             else:
+                if filename.lower().endswith((".xye", ".fxye")):
+                    if not self._ensure_poisson_errors():
+                        return
                 self.model.current_configuration.save_pattern(
                     filename, subtract_background=True
                 )
@@ -242,9 +289,13 @@ class PatternController(object):
 
         if filename != "":
             self.model.working_directories["pattern"] = os.path.dirname(filename)
+            try:
+                self.model.pattern_model.load_pattern(filename)
+            except FileLoadingError as e:
+                self.widget.show_error_msg(str(e))
+                return
             self.widget.pattern_filename_txt.setText(os.path.basename(filename))
             self.widget.pattern_directory_txt.setText(os.path.dirname(filename))
-            self.model.pattern_model.load_pattern(filename)
             self.widget.pattern_next_btn.setEnabled(True)
             self.widget.pattern_previous_btn.setEnabled(True)
 
@@ -260,12 +311,6 @@ class PatternController(object):
         self.model.pattern_model.load_next_file(step=step)
         self.widget.pattern_filename_txt.setText(
             os.path.basename(self.model.pattern.filename)
-        )
-
-    def autocreate_cb_changed(self):
-        self.autocreate_pattern = self.widget.pattern_autocreate_cb.isChecked()
-        self.model.current_configuration.auto_save_integrated_pattern = (
-            self.widget.pattern_autocreate_cb.isChecked()
         )
 
     def filename_txt_changed(self):
@@ -306,47 +351,59 @@ class PatternController(object):
     def set_iteration_mode_time(self):
         self.model.pattern_model.set_file_iteration_mode("time")
 
+    # (axis label, unit suffix, inverted x-axis) per integration unit
+    _UNIT_DISPLAY = {
+        "2th_deg": ("2θ", "°", False),
+        "q_A^-1": ("Q", "Å⁻¹", False),
+        "d_A": ("d", "Å", True),
+    }
+
     def set_unit_tth(self):
-        previous_unit = self.integration_unit
-        if previous_unit == "2th_deg":
-            return
-        self.integration_unit = "2th_deg"
-
-        self.model.current_configuration.integration_unit = "2th_deg"
-        self.widget.pattern_widget.pattern_plot.setLabel("bottom", "2θ", "°")
-        self.widget.pattern_widget.pattern_plot.invertX(False)
-        if self.model.calibration_model.is_calibrated:
-            self.update_x_range(previous_unit, self.integration_unit)
-            self.update_line_position(previous_unit, self.integration_unit)
-
-        # self.finish_update_bg_linear_region()
+        self.set_unit("2th_deg")
 
     def set_unit_q(self):
-        previous_unit = self.integration_unit
-        if previous_unit == "q_A^-1":
-            return
-        self.integration_unit = "q_A^-1"
-
-        self.model.current_configuration.integration_unit = "q_A^-1"
-
-        self.widget.pattern_widget.pattern_plot.invertX(False)
-        self.widget.pattern_widget.pattern_plot.setLabel("bottom", "Q", "Å⁻¹")
-        if self.model.calibration_model.is_calibrated:
-            self.update_x_range(previous_unit, self.integration_unit)
-            self.update_line_position(previous_unit, self.integration_unit)
+        self.set_unit("q_A^-1")
 
     def set_unit_d(self):
-        previous_unit = self.integration_unit
-        if previous_unit == "d_A":
-            return
-        self.integration_unit = "d_A"
+        self.set_unit("d_A")
 
-        self.model.current_configuration.integration_unit = "d_A"
-        self.widget.pattern_widget.pattern_plot.setLabel("bottom", "d", "Å")
-        self.widget.pattern_widget.pattern_plot.invertX(True)
+    def set_unit(self, unit):
+        """The single write path for the integration unit; display updates
+        happen in reaction to the model's integration_unit_changed signal."""
+        self.model.current_configuration.integration_unit = unit
+
+    def _integration_unit_changed(self, new_unit, previous_unit):
+        self._apply_unit_change(previous_unit, new_unit)
+
+    def _displayed_unit(self):
+        """The unit the pattern plot currently displays, from the button
+        states (the widgets are the display, not the source of truth)."""
+        if self.widget.pattern_q_btn.isChecked():
+            return "q_A^-1"
+        if self.widget.pattern_d_btn.isChecked():
+            return "d_A"
+        return "2th_deg"
+
+    def _apply_unit_change(self, previous_unit, new_unit):
+        self._render_unit(new_unit)
+        if previous_unit == new_unit:
+            return
         if self.model.calibration_model.is_calibrated:
-            self.update_x_range(previous_unit, self.integration_unit)
-            self.update_line_position(previous_unit, self.integration_unit)
+            self.update_x_range(previous_unit, new_unit)
+            self.update_line_position(previous_unit, new_unit)
+
+    def _render_unit(self, unit):
+        label, unit_suffix, inverted = self._UNIT_DISPLAY[unit]
+        button = {
+            "2th_deg": self.widget.pattern_tth_btn,
+            "q_A^-1": self.widget.pattern_q_btn,
+            "d_A": self.widget.pattern_d_btn,
+        }[unit]
+        button.setChecked(True)
+        self.widget.pattern_widget.pattern_plot.setLabel(
+            "bottom", label, unit_suffix
+        )
+        self.widget.pattern_widget.pattern_plot.invertX(inverted)
 
     def update_x_range(self, previous_unit, new_unit):
         old_x_axis_range = self.widget.pattern_widget.pattern_plot.viewRange()[0]
@@ -417,15 +474,15 @@ class PatternController(object):
 
     def get_position_strings(self, x):
         if self.model.calibration_model.is_calibrated:
-            if self.integration_unit == "2th_deg":
+            if self.model.current_configuration.integration_unit == "2th_deg":
                 tth = x
                 q_value = self.convert_x_value(tth, "2th_deg", "q_A^-1")
                 d_value = self.convert_x_value(tth, "2th_deg", "d_A")
-            elif self.integration_unit == "q_A^-1":
+            elif self.model.current_configuration.integration_unit == "q_A^-1":
                 q_value = x
                 tth = self.convert_x_value(q_value, "q_A^-1", "2th_deg")
                 d_value = self.convert_x_value(q_value, "q_A^-1", "d_A")
-            elif self.integration_unit == "d_A":
+            elif self.model.current_configuration.integration_unit == "d_A":
                 d_value = x
                 q_value = self.convert_x_value(d_value, "d_A", "q_A^-1")
                 tth = self.convert_x_value(d_value, "d_A", "2th_deg")
@@ -437,24 +494,27 @@ class PatternController(object):
             tth_str = "2θ: -"
             d_str = "d: -"
             q_str = "Q: -"
-            if self.integration_unit == "2th_deg":
+            if self.model.current_configuration.integration_unit == "2th_deg":
                 tth_str = "2θ:%9.3f  " % x
-            elif self.integration_unit == "q_A^-1":
+            elif self.model.current_configuration.integration_unit == "q_A^-1":
                 q_str = "Q:%9.3f  " % x
-            elif self.integration_unit == "d_A":
+            elif self.model.current_configuration.integration_unit == "d_A":
                 d_str = "d:%9.3f  " % x
         azi_str = "X: -"
         return tth_str, d_str, q_str, azi_str
 
     def key_press_event(self, ev):
         if (ev.key() == QtCore.Qt.Key_Left) or (ev.key() == QtCore.Qt.Key_Right):
+            if not (ev.modifiers() & QtCore.Qt.AltModifier):
+                ev.ignore()
+                return
             pos = self.widget.pattern_widget.get_pos_line()
             step = np.min(np.diff(self.model.pattern.data[0]))
             if ev.modifiers() & QtCore.Qt.ControlModifier:
                 step /= 20.0
             elif ev.modifiers() & QtCore.Qt.ShiftModifier:
                 step *= 10
-            if self.integration_unit == "d_A":
+            if self.model.current_configuration.integration_unit == "d_A":
                 step *= -1
             if ev.key() == QtCore.Qt.Key_Left:
                 new_pos = pos - step
@@ -462,13 +522,33 @@ class PatternController(object):
                 new_pos = pos + step
             self.model.clicked_tth_changed.emit(new_pos)
 
+    def _y_scale_log_clicked(self):
+        if self.widget.pattern_log_btn.isChecked():
+            self.widget.pattern_sqrt_btn.setChecked(False)
+            self.widget.pattern_widget.set_y_scale("log")
+        else:
+            self.widget.pattern_widget.set_y_scale("linear")
+
+    def _y_scale_sqrt_clicked(self):
+        if self.widget.pattern_sqrt_btn.isChecked():
+            self.widget.pattern_log_btn.setChecked(False)
+            self.widget.pattern_widget.set_y_scale("sqrt")
+        else:
+            self.widget.pattern_widget.set_y_scale("linear")
+
     def update_gui(self):
-        if self.model.current_configuration.integration_unit == "2th_deg":
-            self.widget.pattern_tth_btn.setChecked(True)
-            self.set_unit_tth()
-        elif self.model.current_configuration.integration_unit == "d_A":
-            self.widget.pattern_d_btn.setChecked(True)
-            self.set_unit_d()
-        elif self.model.current_configuration.integration_unit == "q_A^-1":
-            self.widget.pattern_q_btn.setChecked(True)
-            self.set_unit_q()
+        self._apply_unit_change(
+            self._displayed_unit(),
+            self.model.current_configuration.integration_unit,
+        )
+        formats = self.model.current_configuration.integrated_patterns_file_formats
+        for checkbox, suffix in (
+            (self.widget.pattern_header_xy_cb, ".xy"),
+            (self.widget.pattern_header_xye_cb, ".xye"),
+            (self.widget.pattern_header_chi_cb, ".chi"),
+            (self.widget.pattern_header_dat_cb, ".dat"),
+            (self.widget.pattern_header_fxye_cb, ".fxye"),
+        ):
+            checkbox.blockSignals(True)
+            checkbox.setChecked(suffix in formats)
+            checkbox.blockSignals(False)

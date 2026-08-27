@@ -1,25 +1,9 @@
-# -*- coding: utf-8 -*-
-# Dioptas - GUI program for fast processing of 2D X-ray diffraction data
-# Principal author: Clemens Prescher (clemens.prescher@gmail.com)
-# Copyright (C) 2014-2019 GSECARS, University of Chicago, USA
-# Copyright (C) 2015-2018 Institute for Geology and Mineralogy, University of Cologne, Germany
-# Copyright (C) 2019-2020 DESY, Hamburg, Germany
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: MIT
 
 from glob import glob
+import logging
 import os
+import time
 import typing
 
 from qtpy.QtGui import QCloseEvent, QColorSpace, QMouseEvent
@@ -36,12 +20,14 @@ from ...widgets.UtilityWidgets import (
 )
 from ...widgets.integration.BatchWidget import open_gl
 
+logger = logging.getLogger(__name__)
+
 # imports for type hinting in PyCharm -- DO NOT DELETE
 from ...widgets.integration import IntegrationWidget
 from ...model.DioptasModel import DioptasModel
 
 
-class BatchController(object):
+class BatchController:
     """
     The class manages the Image actions in the batch integration Window. It connects the file actions, as
     well as interaction with the image_view.
@@ -127,15 +113,15 @@ class BatchController(object):
             self.normalize_btn_clicked
         )
 
-        # set unit of x axis
+        # set unit of x axis; display updates run in reaction to the model
+        # signal, so unit changes made elsewhere (e.g. the pattern widget's
+        # unit buttons) are reflected here as well
         self.widget.batch_widget.options_widget.tth_btn.clicked.connect(
             self.set_unit_tth
         )
         self.widget.batch_widget.options_widget.q_btn.clicked.connect(self.set_unit_q)
         self.widget.batch_widget.options_widget.d_btn.clicked.connect(self.set_unit_d)
-        self.widget.pattern_q_btn.clicked.connect(self.set_unit_q)
-        self.widget.pattern_tth_btn.clicked.connect(self.set_unit_tth)
-        self.widget.pattern_d_btn.clicked.connect(self.set_unit_d)
+        self.model.integration_unit_changed.connect(self._integration_unit_changed)
 
         # work with filenames
         self.widget.img_directory_txt.editingFinished.connect(
@@ -436,69 +422,54 @@ class BatchController(object):
         self.widget.batch_widget.stack_plot_widget.img_view.activate_vertical_line()
         self.widget.batch_widget.stack_plot_widget.img_view.vertical_line.setValue(pos)
 
-    def set_unit_tth(self):
-        """
-        Set 2th_deg unit on batch plot
+    # (axis label, unit suffix, inverted x-axis) per integration unit
+    _UNIT_DISPLAY = {
+        "2th_deg": ("2θ", "°", False),
+        "q_A^-1": ("Q", "A<sup>-1</sup>", False),
+        "d_A": ("d", "A", True),
+    }
 
-        Corresponding buttons on batch and pattern widgets are checked.
-        """
-        self.widget.batch_widget.options_widget.tth_btn.setChecked(True)
-        self.widget.integration_pattern_widget.tth_btn.setChecked(True)
-        self.model.current_configuration.integration_unit = "2th_deg"
-        self.widget.batch_widget.stack_plot_widget.img_view.bottom_axis_cake.setLabel(
-            "2θ", "°"
-        )
-        self.widget.batch_widget.stack_plot_widget.img_view.img_view_box.invertX(False)
-        self.update_x_axis()
-        if not self.model.calibration_model.is_calibrated:
-            x = (
-                self.widget.batch_widget.stack_plot_widget.img_view.vertical_line.getXPos()
-            )
-            y = (
-                self.widget.batch_widget.position_widget.step_series_widget.slider.value()
-            )
-            self.plot_pattern(int(x), int(y))
+    def set_unit_tth(self):
+        self.set_unit("2th_deg")
 
     def set_unit_q(self):
-        """
-        Set q_A^-1 unit on batch plot
-
-        Corresponding buttons on batch and pattern widgets are checked.
-        """
-        self.widget.batch_widget.options_widget.q_btn.setChecked(True)
-        self.widget.integration_pattern_widget.q_btn.setChecked(True)
-        self.model.current_configuration.integration_unit = "q_A^-1"
-        self.widget.batch_widget.stack_plot_widget.img_view.img_view_box.invertX(False)
-        self.widget.batch_widget.stack_plot_widget.img_view.bottom_axis_cake.setLabel(
-            "Q", "A<sup>-1</sup>"
-        )
-        self.update_x_axis()
-        if not self.model.calibration_model.is_calibrated:
-            x = (
-                self.widget.batch_widget.stack_plot_widget.img_view.vertical_line.getXPos()
-            )
-            y = (
-                self.widget.batch_widget.position_widget.step_series_widget.slider.value()
-            )
-            self.plot_pattern(int(x), int(y))
+        self.set_unit("q_A^-1")
 
     def set_unit_d(self):
-        """
-        Set d_A unit on batch plot
+        self.set_unit("d_A")
 
-        Corresponding buttons on batch and pattern widgets are checked.
-        """
-        self.widget.batch_widget.options_widget.d_btn.setChecked(True)
-        self.widget.integration_pattern_widget.d_btn.setChecked(True)
-        self.model.current_configuration.integration_unit = "d_A"
-        self.widget.batch_widget.stack_plot_widget.img_view.bottom_axis_cake.setLabel(
-            "d", "A"
-        )
+    def set_unit(self, unit):
+        changed = self.model.current_configuration.integration_unit != unit
+        self.model.current_configuration.integration_unit = unit
+        if not changed:
+            # no model event fired — still refresh the batch axis display,
+            # matching the historical always-refresh behavior of set_unit_*
+            self._apply_unit(unit)
+
+    def _integration_unit_changed(self, new_unit, previous_unit=None):
+        self._apply_unit(new_unit)
+
+    def _apply_unit(self, unit):
+        """Renders the batch plot for the given integration unit."""
+        label, unit_suffix, inverted = self._UNIT_DISPLAY[unit]
+        batch_button = {
+            "2th_deg": self.widget.batch_widget.options_widget.tth_btn,
+            "q_A^-1": self.widget.batch_widget.options_widget.q_btn,
+            "d_A": self.widget.batch_widget.options_widget.d_btn,
+        }[unit]
+        batch_button.setChecked(True)
+        pattern_button = {
+            "2th_deg": self.widget.integration_pattern_widget.tth_btn,
+            "q_A^-1": self.widget.integration_pattern_widget.q_btn,
+            "d_A": self.widget.integration_pattern_widget.d_btn,
+        }[unit]
+        pattern_button.setChecked(True)
+        img_view = self.widget.batch_widget.stack_plot_widget.img_view
+        img_view.bottom_axis_cake.setLabel(label, unit_suffix)
+        img_view.img_view_box.invertX(inverted)
         self.update_x_axis()
         if not self.model.calibration_model.is_calibrated:
-            x = (
-                self.widget.batch_widget.stack_plot_widget.img_view.vertical_line.getXPos()
-            )
+            x = img_view.vertical_line.getXPos()
             y = (
                 self.widget.batch_widget.position_widget.step_series_widget.slider.value()
             )
@@ -850,12 +821,14 @@ class BatchController(object):
         Check if file contains processed data
         """
         if os.path.splitext(filename)[1] == ".nxs":
-            data_file = h5py.File(filename, "r")
-            if "processed" in data_file:
-                return True
-            # ToDo Check for old format. To be removed
-            if "data" in data_file:
-                return True
+            # the handle must be closed on every path: a leaked reader blocks
+            # later writes to the same file
+            with h5py.File(filename, "r") as data_file:
+                if "processed" in data_file:
+                    return True
+                # ToDo Check for old format. To be removed
+                if "data" in data_file:
+                    return True
         return False
 
     def load_raw_data(self, filenames):
@@ -877,7 +850,7 @@ class BatchController(object):
                 ]
                 self.model.batch_model.set_image_files(filenames)
             except IOError:
-                print("Raw images are not found")
+                logger.warning("Raw images are not found")
 
         self.model.img_model.blockSignals(False)
         files = self.model.batch_model.files
@@ -1199,10 +1172,9 @@ class BatchController(object):
             self.model.overlay_model.add_overlay(
                 new_binning, data[i, x1:x2], f"{f_name}, {pos}"
             )
-        separation = (
-            self.widget.integration_control_widget.overlay_control_widget.waterfall_separation_msb.value()
+        self.model.overlay_model.overlay_waterfall(
+            self.model.view.waterfall_separation
         )
-        self.model.overlay_model.overlay_waterfall(separation)
 
     def load_single_image(self, x, y):
         """
@@ -1266,15 +1238,14 @@ class BatchController(object):
         :param y: Number of raw image in the batch
         """
         y = int(y)
-        self.model.current_configuration.auto_integrate_pattern = False
-        self.model.batch_model.load_image(
-            y, self.widget.batch_widget.mode_widget.view_f_btn.isChecked()
-        )
-        f_name, pos = self.model.batch_model.get_image_info(
-            y, self.widget.batch_widget.mode_widget.view_f_btn.isChecked()
-        )
+        with self.model.current_configuration.pattern_integration.hold(flush=False):
+            self.model.batch_model.load_image(
+                y, self.widget.batch_widget.mode_widget.view_f_btn.isChecked()
+            )
+            f_name, pos = self.model.batch_model.get_image_info(
+                y, self.widget.batch_widget.mode_widget.view_f_btn.isChecked()
+            )
         self.widget.batch_widget.setWindowTitle(f"Batch widget. {f_name} - {pos}")
-        self.model.current_configuration.auto_integrate_pattern = True
         self.widget.batch_widget.position_widget.mouse_pos_widget.clicked_pos_widget.x_pos_lbl.setText(
             f"Img: {y:.0f}"
         )
@@ -1440,18 +1411,32 @@ class BatchController(object):
                 self.widget.batch_widget.position_widget.step_series_widget.get_image_range()
             )
 
-        n_int = (stop - start) / step
+        n_total = len(range(start, stop + 1, step))
         progress_dialog = get_progress_dialog(
             "Integrating multiple images.",
             "Abort Integration",
-            n_int,
+            n_total,
             self.widget.batch_widget,
         )
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setWindowModality(QtCore.Qt.ApplicationModal)
+        label = progress_dialog.findChild(QtWidgets.QLabel)
+        if label is not None:
+            label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+
+        t_start = time.time()
 
         def callback_fn(current_index):
             if progress_dialog.wasCanceled():
                 return False
             progress_dialog.setValue(current_index)
+            elapsed = time.time() - t_start
+            rate = current_index / elapsed if elapsed > 0 else 0
+            progress_dialog.setLabelText(
+                f"Image {current_index} of {n_total}\n"
+                f"{elapsed:.1f}s elapsed\n"
+                f"{rate:.1f} img/s"
+            )
             QtWidgets.QApplication.processEvents()
             return not progress_dialog.wasCanceled()
 
@@ -1531,12 +1516,4 @@ class BatchController(object):
         """
         Apply integration unit from current_configuration
         """
-        if self.model.current_configuration.integration_unit == "2th_deg":
-            self.widget.batch_widget.options_widget.tth_btn.setChecked(True)
-            self.set_unit_tth()
-        elif self.model.current_configuration.integration_unit == "d_A":
-            self.widget.batch_widget.options_widget.d_btn.setChecked(True)
-            self.set_unit_d()
-        elif self.model.current_configuration.integration_unit == "q_A^-1":
-            self.widget.batch_widget.options_widget.q_btn.setChecked(True)
-            self.set_unit_q()
+        self._apply_unit(self.model.current_configuration.integration_unit)
