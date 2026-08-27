@@ -82,6 +82,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools_scm]
 version_file = "dioptas/_version.py"
 fallback_version = "0.10.0"
+tag_regex = "^(?P<version>\\d+\\.\\d+\\.\\d+)$"
+git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--exclude", "*_*"]
 
 [tool.cibuildwheel]
 # Project requires Python >=3.11,<3.14
