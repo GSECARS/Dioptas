@@ -164,10 +164,11 @@ def main():
             if make_shortcut is None:
                 raise ImportError("pyshortcuts not installed.  Try `pip install pyshortcuts`")
             if _platform == "win32":
-                # Use a local copy of the icon so Explorer can find it without
-                # the Samba share being mounted; strip the extension so
-                # pyshortcuts appends .ico itself.
-                icon = os.path.splitext(_win_local_icon())[0]
+                # Pass the full .ico path. pyshortcuts falls back to Python's
+                # icon when Path(icon).exists() is False, which happens if the
+                # extension is omitted. The local AppData copy is always
+                # accessible even when the Samba share isn't mounted yet.
+                icon = _win_local_icon()
             else:
                 icon = os.path.join(icons_path, "icon")
             make_shortcut(
