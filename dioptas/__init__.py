@@ -85,6 +85,29 @@ def _check_dioptrin_license():
         return False
 
 
+def _win_local_icon():
+    """Return a locally cached copy of icon.ico on Windows.
+
+    Windows Explorer resolves shortcut icons at shell startup, before network
+    shares are necessarily mapped.  Caching the .ico in %APPDATA% ensures the
+    shortcut and taskbar always show the Dioptas icon even when the source
+    tree lives on a Samba share.  Falls back to the package path on failure.
+    """
+    import shutil
+
+    src = os.path.join(icons_path, "icon.ico")
+    dest_dir = os.path.join(
+        os.environ.get("APPDATA", os.path.expanduser("~")), "Dioptas"
+    )
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = os.path.join(dest_dir, "icon.ico")
+        shutil.copy2(src, dest)
+        return dest
+    except OSError:
+        return src
+
+
 def _set_application_icon(app):
     """Application-wide icon, inherited by every top-level window.
 
@@ -94,8 +117,11 @@ def _set_application_icon(app):
     """
     from qtpy import QtGui
 
-    icon_file = "icon.ico" if _platform == "win32" else "icon.svg"
-    app.setWindowIcon(QtGui.QIcon(os.path.join(icons_path, icon_file)))
+    if _platform == "win32":
+        icon_file = _win_local_icon()
+    else:
+        icon_file = os.path.join(icons_path, "icon.svg")
+    app.setWindowIcon(QtGui.QIcon(icon_file))
 
 
 def main():
@@ -137,11 +163,18 @@ def main():
         elif sys.argv[1].startswith("makeshortcut"):
             if make_shortcut is None:
                 raise ImportError("pyshortcuts not installed.  Try `pip install pyshortcuts`")
+            if _platform == "win32":
+                # Use a local copy of the icon so Explorer can find it without
+                # the Samba share being mounted; strip the extension so
+                # pyshortcuts appends .ico itself.
+                icon = os.path.splitext(_win_local_icon())[0]
+            else:
+                icon = os.path.join(icons_path, "icon")
             make_shortcut(
                 "-m dioptas",
                 name="Dioptas",
                 description="Dioptas 2D XRD {}".format(__version__),
-                icon=os.path.join(icons_path, "icon"),
+                icon=icon,
                 terminal=False,
             )
 
