@@ -84,4 +84,22 @@ class OptionalBuildExt(build_ext):
             print(f"WARNING: skipping extension {ext.name}: {exc}")
 
 
+# setuptools_scm hooks into egg_info and calls os.path.relpath() with a UNC
+# path against a drive-letter CWD on Windows Samba mounts, raising ValueError.
+# Patching _get_tracked_files to return None on failure makes it fall back to
+# the default filesystem scanner instead of crashing.
+try:
+    import setuptools_scm._integration.egg_info as _scm_egg_info
+    _orig_get_tracked = _scm_egg_info._get_tracked_files
+
+    def _safe_get_tracked_files(data):
+        try:
+            return _orig_get_tracked(data)
+        except Exception:
+            return None
+
+    _scm_egg_info._get_tracked_files = _safe_get_tracked_files
+except Exception:
+    pass
+
 setup(ext_modules=extensions, cmdclass={"build_ext": OptionalBuildExt})
