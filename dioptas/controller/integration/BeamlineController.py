@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 
-from ...widgets.integration import IntegrationWidget
+# imports for type hinting in PyCharm -- DO NOT DELETE
+from ...widgets.BeamlineWidget import BeamlineWidget
 from ...widgets.CalibrationWidget import CalibrationWidget
 from .EpicsController import EpicsController
 from ...model.BeamlineConfig import BeamlineConfig
@@ -8,30 +9,30 @@ from ...model.BeamlineConfig import BeamlineConfig
 
 class BeamlineController:
     """
-    Manages the beamline configuration tab in the integration control panel.
+    Manages the beamline configuration floating window.
     Applies saved EPICS motor PVs, detector pixel size, and safety condition PVs
     on startup and whenever the user saves a new configuration.
     """
 
     def __init__(
         self,
-        integration_widget: IntegrationWidget,
+        beamline_widget: BeamlineWidget,
         calibration_widget: CalibrationWidget,
         epics_controller: EpicsController,
         beamline_config: BeamlineConfig,
     ):
         """
-        :param integration_widget: Reference to the IntegrationWidget
+        :param beamline_widget: Reference to the BeamlineWidget floating window
         :param calibration_widget: Reference to the CalibrationWidget
         :param epics_controller: Reference to the EpicsController
         :param beamline_config: Reference to the BeamlineConfig model
 
-        :type integration_widget: IntegrationWidget
+        :type beamline_widget: BeamlineWidget
         :type calibration_widget: CalibrationWidget
         :type epics_controller: EpicsController
         :type beamline_config: BeamlineConfig
         """
-        self.widget = integration_widget.integration_control_widget.beamline_widget
+        self.widget = beamline_widget
         self.calibration_widget = calibration_widget
         self.epics_controller = epics_controller
         self.beamline_config = beamline_config
@@ -43,6 +44,7 @@ class BeamlineController:
     def _connect_signals(self):
         self.widget.preset_cb.currentTextChanged.connect(self._on_preset_changed)
         self.widget.save_btn.clicked.connect(self._save_config)
+        self.widget.connect_epics_btn.clicked.connect(self.epics_controller.update_current_motor_position)
 
     def _on_preset_changed(self, name: str):
         if name != 'Custom':
@@ -63,9 +65,9 @@ class BeamlineController:
         self.widget.focus_pv_txt.setText(config.sample_position_z)
         self.widget.pixel_size_sb.setValue(config.pixel_size)
 
-        for i, cond in enumerate(config.condition_pvs[:3]):
-            self.widget.cond_pv_txts[i].setText(cond['pv'])
-            self.widget.cond_limit_sbs[i].setValue(cond['limit'])
+        self.widget.clear_condition_rows()
+        for cond in config.condition_pvs:
+            self.widget.add_condition_row(cond['pv'], cond['limit'])
 
     def _apply_config(self):
         self.epics_controller.load_config(self.beamline_config)
@@ -79,10 +81,6 @@ class BeamlineController:
         config.sample_position_y = self.widget.ver_pv_txt.text()
         config.sample_position_z = self.widget.focus_pv_txt.text()
         config.pixel_size = self.widget.pixel_size_sb.value()
-        config.condition_pvs = [
-            {'pv': self.widget.cond_pv_txts[i].text(),
-             'limit': self.widget.cond_limit_sbs[i].value()}
-            for i in range(3)
-        ]
+        config.condition_pvs = self.widget.condition_rows
         config.save()
         self._apply_config()

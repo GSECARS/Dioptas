@@ -42,6 +42,8 @@ class EpicsController:
             {'pv': '13IDD:m67',  'limit': -130},
         ]
         self.beamline_config = None
+        self.is_connected: bool = False
+        self.on_connection_changed = None
 
         self.connect_signals()
 
@@ -51,23 +53,26 @@ class EpicsController:
         self.model.img_changed.connect(self.update_image_position)
 
         self.widget.move_widget_btn.clicked.connect(self.widget.move_widget.raise_widget)
-        self.widget.move_widget.connect_epics_btn.clicked.connect(self.update_current_motor_position)
         self.widget.move_widget.move_btn.clicked.connect(self.move_stage)
-        self.widget.move_widget.motors_setup_btn.clicked.connect(self.open_motors_setup_widget)
-
-        self.widget.move_widget.motors_setup_widget.reread_config_btn.clicked.connect(self.reread_config)
-        self.widget.move_widget.motors_setup_widget.set_motor_names_btn.clicked.connect(self.get_motors)
 
     def update_current_motor_position(self):
+        if epics is None:
+            return
         hor = epics.caget(self.hor_motor_name + '.RBV', as_string=True)
         ver = epics.caget(self.ver_motor_name + '.RBV', as_string=True)
         focus = epics.caget(self.focus_motor_name + '.RBV', as_string=True)
 
-        if ver is not None and hor is not None and focus is not None:
+        connected = hor is not None and ver is not None and focus is not None
+        if connected:
             self.epics_update_timer.start(1000)
         else:
             if self.epics_update_timer.isActive():
                 self.epics_update_timer.stop()
+
+        if connected != self.is_connected:
+            self.is_connected = connected
+            if self.on_connection_changed is not None:
+                self.on_connection_changed(connected)
 
         self.move_widget.hor_lbl.setText(str(hor))
         self.move_widget.ver_lbl.setText(str(ver))
@@ -96,37 +101,12 @@ class EpicsController:
             if self.move_widget.move_focus_cb.isChecked():
                 epics.caput(self.focus_motor_name + '.VAL', focus_pos)
 
-    def open_motors_setup_widget(self):
-        self.move_widget.motors_setup_widget.hor_motor_txt.setText(self.hor_motor_name)
-        self.move_widget.motors_setup_widget.ver_motor_txt.setText(self.ver_motor_name)
-        self.move_widget.motors_setup_widget.focus_motor_txt.setText(self.focus_motor_name)
-        self.move_widget.motors_setup_widget.show()
-
-    def get_motors(self):
-        self.hor_motor_name, self.ver_motor_name, self.focus_motor_name, = \
-            self.move_widget.motors_setup_widget.return_motor_names()
-        self.update_current_motor_position()
-
     def load_config(self, beamline_config):
         self.beamline_config = beamline_config
         self.hor_motor_name = beamline_config.sample_position_x
         self.ver_motor_name = beamline_config.sample_position_y
         self.focus_motor_name = beamline_config.sample_position_z
         self.condition_pvs = beamline_config.condition_pvs
-        self.move_widget.motors_setup_widget.hor_motor_txt.setText(self.hor_motor_name)
-        self.move_widget.motors_setup_widget.ver_motor_txt.setText(self.ver_motor_name)
-        self.move_widget.motors_setup_widget.focus_motor_txt.setText(self.focus_motor_name)
-
-    def reread_config(self):
-        if self.beamline_config is not None:
-            self.move_widget.motors_setup_widget.hor_motor_txt.setText(self.beamline_config.sample_position_x)
-            self.move_widget.motors_setup_widget.ver_motor_txt.setText(self.beamline_config.sample_position_y)
-            self.move_widget.motors_setup_widget.focus_motor_txt.setText(self.beamline_config.sample_position_z)
-        else:
-            self.move_widget.motors_setup_widget.hor_motor_txt.setText(epics_config['sample_position_x'])
-            self.move_widget.motors_setup_widget.ver_motor_txt.setText(epics_config['sample_position_y'])
-            self.move_widget.motors_setup_widget.focus_motor_txt.setText(epics_config['sample_position_z'])
-
     def closeEvent(self, QCloseEvent):
         self.epics_update_timer.stop()
 

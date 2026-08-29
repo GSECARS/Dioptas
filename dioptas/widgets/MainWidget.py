@@ -2,6 +2,7 @@
 
 from qtpy import QtWidgets, QtCore
 
+from .BeamlineWidget import BeamlineWidget
 from .ConfigurationWidget import ConfigurationWidget
 from .CalibrationWidget import CalibrationWidget
 from .MaskWidget import MaskWidget
@@ -37,6 +38,17 @@ class MainWidget(QtWidgets.QWidget):
         self._left_layout.addLayout(self._history_layout)
         self._left_layout.addLayout(self._mode_layout)
         self._left_layout.addLayout(self._external_actions_layout)
+
+        self.epics_status_dot = QtWidgets.QLabel(self)
+        self.beamline_btn = FlatButton("BL", self)
+        _bl_row = QtWidgets.QHBoxLayout()
+        _bl_row.setContentsMargins(0, 0, 0, 0)
+        _bl_row.setSpacing(4)
+        _bl_row.addStretch()
+        _bl_row.addWidget(self.epics_status_dot)
+        _bl_row.addWidget(self.beamline_btn)
+        _bl_row.addStretch()
+        self._external_actions_layout.addLayout(_bl_row)
 
         self._outer_layout.addLayout(self._left_layout)
         self._outer_layout.addWidget(VerticalLine())
@@ -185,6 +197,7 @@ class MainWidget(QtWidgets.QWidget):
         self.mask_widget = MaskWidget(self)
         self.integration_widget = IntegrationWidget(self)
         self.map_widget = MapWidget(self)
+        self.beamline_widget = BeamlineWidget(self)
         # home for the map panel while it is undocked; parented so it is torn
         # down with the main window, but shown as its own window
         self.map_panel_window = MapPanelWindow(self)
@@ -204,10 +217,16 @@ class MainWidget(QtWidgets.QWidget):
         self.style_widgets()
         self.add_tooltips()
 
+    def set_epics_connected(self, connected: bool):
+        color = '#44bb44' if connected else '#bb4444'
+        self.epics_status_dot.setStyleSheet(f'background-color: {color}; border-radius: 5px;')
+
     def style_widgets(self):
         self._style_mode_btns()
         self._style_menu_btn()
         self._style_history_btns()
+        self.epics_status_dot.setFixedSize(10, 10)
+        self.set_epics_connected(False)
 
         button_height = 24
         button_width = 24
@@ -263,6 +282,7 @@ class MainWidget(QtWidgets.QWidget):
         self.calibration_mode_btn.setToolTip("Calibration Mode")
         self.mask_mode_btn.setToolTip("Mask Mode")
         self.integration_mode_btn.setToolTip("Integration Mode")
+        self.beamline_btn.setToolTip("Beamline Configuration")
 
     def create_external_actions(self, quick_actions):
         self.external_action_btns = {}

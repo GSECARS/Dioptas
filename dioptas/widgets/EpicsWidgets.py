@@ -11,12 +11,8 @@ class MoveStageWidget(QtWidgets.QWidget):
         self.setWindowTitle("Move")
         self.setGeometry(400, 400, 280, 180)
 
-        self.motors_setup_widget = MotorsSetup(self)
-
         # create buttons
-        self.connect_epics_btn = FlatButton('Connect Epics', self)
         self.move_btn = FlatButton('Move motors', self)
-        self.motors_setup_btn = FlatButton('Setup', self)
 
         # create labels
         self.img_hor_lbl = QtWidgets.QLabel(self)
@@ -59,9 +55,7 @@ class MoveStageWidget(QtWidgets.QWidget):
         grid_layout.addWidget(self.move_focus_cb, 3, 3)
 
         btn_layout = QtWidgets.QHBoxLayout()
-        btn_layout.addWidget(self.connect_epics_btn)
         btn_layout.addWidget(self.move_btn)
-        btn_layout.addWidget(self.motors_setup_btn)
 
         self._main_layout = QtWidgets.QVBoxLayout()
         self._main_layout.addLayout(grid_layout)
@@ -79,45 +73,3 @@ class MoveStageWidget(QtWidgets.QWidget):
         self.raise_()
 
 
-class MotorsSetup(QtWidgets.QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-        self.setWindowTitle("Motors setup")
-
-        self.hor_lbl = LabelAlignRight('Hor:', self)
-        self.ver_lbl = LabelAlignRight('Ver:', self)
-        self.focus_lbl = LabelAlignRight('Focus:', self)
-
-        self.hor_motor_txt = QtWidgets.QLineEdit(self)
-        self.ver_motor_txt = QtWidgets.QLineEdit(self)
-        self.focus_motor_txt = QtWidgets.QLineEdit(self)
-
-        self.set_motor_names_btn = QtWidgets.QPushButton('Set', self)
-        self.reread_config_btn = QtWidgets.QPushButton('Default config', self)
-
-        grid = QtWidgets.QGridLayout()
-        grid.setVerticalSpacing(10)
-        grid.setHorizontalSpacing(10)
-
-        grid.addWidget(self.hor_lbl, 1, 0)
-        grid.addWidget(self.ver_lbl, 2, 0)
-        grid.addWidget(self.focus_lbl, 3, 0)
-        grid.addWidget(self.hor_motor_txt, 1, 1)
-        grid.addWidget(self.ver_motor_txt, 2, 1)
-        grid.addWidget(self.focus_motor_txt, 3, 1)
-        grid.addWidget(self.set_motor_names_btn, 5, 1)
-        grid.addWidget(self.reread_config_btn, 5, 0)
-
-        self.setLayout(grid)
-        self.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.MSWindowsFixedSizeDialogHint)
-        self.setAttribute(QtCore.Qt.WA_MacAlwaysShowToolWindow)
-
-    def raise_widget(self):
-        self.show()
-        self.setWindowState(self.windowState() & ~QtCore.Qt.WindowMinimized | QtCore.Qt.WindowActive)
-        self.activateWindow()
-        self.raise_()
-
-    def return_motor_names(self):
-        return str(self.hor_motor_txt.text()), str(self.ver_motor_txt.text()), str(self.focus_motor_txt.text())

@@ -73,11 +73,14 @@ class MainController:
 
         self.beamline_config = BeamlineConfig()
         self.beamline_controller = BeamlineController(
-            self.widget.integration_widget,
+            self.widget.beamline_widget,
             self.widget.calibration_widget,
             self.integration_controller.image_controller.epics_controller,
             self.beamline_config,
         )
+        self.widget.beamline_btn.clicked.connect(self.widget.beamline_widget.raise_widget)
+        self.integration_controller.image_controller.epics_controller.on_connection_changed = \
+            self.widget.set_epics_connected
 
         self.calibration_controller.activate()
         self.integration_controller.image_controller.deactivate()

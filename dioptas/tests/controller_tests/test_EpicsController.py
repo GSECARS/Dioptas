@@ -30,7 +30,6 @@ class TestEpicsController(QtTest):
 
         self.integration_widget = IntegrationWidget()
         self.move_widget = self.integration_widget.move_widget
-        self.setup_widget = self.integration_widget.move_widget.motors_setup_widget
         self.model = DioptasModel()
         self.epics_controller = EpicsController(self.integration_widget, self.model)
 
