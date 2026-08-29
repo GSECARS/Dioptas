@@ -50,6 +50,7 @@ dependencies = [
     # exact-symmetry reflection generation and structure-factor intensities
     # lower bound: canonical cubic HKL representatives prefer (100) over (001)
     "phasesmith>=0.4.1,<0.5",
+    "pyepics>=3.5.10",
 ]
 
 [project.optional-dependencies]
