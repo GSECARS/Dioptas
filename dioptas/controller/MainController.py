@@ -18,10 +18,12 @@ from ..widgets.UtilityWidgets import save_file_dialog, open_file_dialog
 
 from . import CalibrationController
 from .integration import IntegrationController
+from .integration.BeamlineController import BeamlineController
 from .MaskController import MaskController
 from .ConfigurationController import ConfigurationController
 from .MapController import MapController
 from .MapPanelController import MapPanelController
+from ..model.BeamlineConfig import BeamlineConfig
 
 from dioptas import __version__
 from ..model.UpdateChecker import check_for_update
@@ -68,6 +70,14 @@ class MainController:
         )
         self._map_panel_host = self.widget.map_widget.map_panel_host
         self._closing = False
+
+        self.beamline_config = BeamlineConfig()
+        self.beamline_controller = BeamlineController(
+            self.widget.integration_widget,
+            self.widget.calibration_widget,
+            self.integration_controller.image_controller.epics_controller,
+            self.beamline_config,
+        )
 
         self.calibration_controller.activate()
         self.integration_controller.image_controller.deactivate()

@@ -54,7 +54,6 @@ class TestEpicsController(QtTest):
         self.assertEqual(self.move_widget.hor_lbl.text(), '12.03')
         self.assertEqual(self.move_widget.ver_lbl.text(), '12.03')
         self.assertEqual(self.move_widget.focus_lbl.text(), '12.03')
-        self.assertEqual(self.move_widget.omega_lbl.text(), '12.03')
 
     def test_update_image_position(self):
         self.epics_controller.update_image_position()
@@ -62,18 +61,15 @@ class TestEpicsController(QtTest):
         self.assertEqual(self.move_widget.img_hor_lbl.text(), '')
         self.assertEqual(self.move_widget.img_ver_lbl.text(), '')
         self.assertEqual(self.move_widget.img_focus_lbl.text(), '')
-        self.assertEqual(self.move_widget.img_omega_lbl.text(), '')
 
         self.model.img_model.motors_info['Horizontal'] = 0.1
         self.model.img_model.motors_info['Vertical'] = 0.2
         self.model.img_model.motors_info['Focus'] = 0.3
-        self.model.img_model.motors_info['Omega'] = 0.4
 
         self.epics_controller.update_image_position()
         self.assertEqual(str(self.move_widget.img_hor_lbl.text()), '0.100')
         self.assertEqual(str(self.move_widget.img_ver_lbl.text()), '0.200')
         self.assertEqual(str(self.move_widget.img_focus_lbl.text()), '0.300')
-        self.assertEqual(str(self.move_widget.img_omega_lbl.text()), '0.400')
 
     @pytest.mark.skipif(not EPICS_AVAILABLE, reason="epics module not installed")
     @patch('epics.caput')
@@ -82,7 +78,6 @@ class TestEpicsController(QtTest):
         self.model.img_model.motors_info['Horizontal'] = 0.1
         self.model.img_model.motors_info['Vertical'] = 0.02
         self.model.img_model.motors_info['Focus'] = 0.05
-        self.model.img_model.motors_info['Omega'] = 90
 
         self.epics_controller.update_image_position()
 
@@ -92,6 +87,6 @@ class TestEpicsController(QtTest):
 
         self.epics_controller.move_stage()
 
-        caput.assert_any_call('13IDD:m81.VAL', 0.1)
-        caput.assert_any_call('13IDD:m83.VAL', 0.02)
-        caput.assert_any_call('13IDD:m82.VAL', 0.05)
+        caput.assert_any_call('13IDD:m98.VAL', 0.1)
+        caput.assert_any_call('13IDD:m97.VAL', 0.02)
+        caput.assert_any_call('13IDD:m99.VAL', 0.05)

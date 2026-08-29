@@ -36,6 +36,12 @@ class EpicsController:
         self.hor_motor_name = epics_config['sample_position_x']
         self.ver_motor_name = epics_config['sample_position_y']
         self.focus_motor_name = epics_config['sample_position_z']
+        self.condition_pvs = [
+            {'pv': '13IDD:m103', 'limit': -175},
+            {'pv': '13IDD:m102', 'limit': -175},
+            {'pv': '13IDD:m67',  'limit': -130},
+        ]
+        self.beamline_config = None
 
         self.connect_signals()
 
@@ -101,10 +107,25 @@ class EpicsController:
             self.move_widget.motors_setup_widget.return_motor_names()
         self.update_current_motor_position()
 
+    def load_config(self, beamline_config):
+        self.beamline_config = beamline_config
+        self.hor_motor_name = beamline_config.sample_position_x
+        self.ver_motor_name = beamline_config.sample_position_y
+        self.focus_motor_name = beamline_config.sample_position_z
+        self.condition_pvs = beamline_config.condition_pvs
+        self.move_widget.motors_setup_widget.hor_motor_txt.setText(self.hor_motor_name)
+        self.move_widget.motors_setup_widget.ver_motor_txt.setText(self.ver_motor_name)
+        self.move_widget.motors_setup_widget.focus_motor_txt.setText(self.focus_motor_name)
+
     def reread_config(self):
-        self.move_widget.motors_setup_widget.hor_motor_txt.setText(epics_config['sample_position_x'])
-        self.move_widget.motors_setup_widget.ver_motor_txt.setText(epics_config['sample_position_y'])
-        self.move_widget.motors_setup_widget.focus_motor_txt.setText(epics_config['sample_position_z'])
+        if self.beamline_config is not None:
+            self.move_widget.motors_setup_widget.hor_motor_txt.setText(self.beamline_config.sample_position_x)
+            self.move_widget.motors_setup_widget.ver_motor_txt.setText(self.beamline_config.sample_position_y)
+            self.move_widget.motors_setup_widget.focus_motor_txt.setText(self.beamline_config.sample_position_z)
+        else:
+            self.move_widget.motors_setup_widget.hor_motor_txt.setText(epics_config['sample_position_x'])
+            self.move_widget.motors_setup_widget.ver_motor_txt.setText(epics_config['sample_position_y'])
+            self.move_widget.motors_setup_widget.focus_motor_txt.setText(epics_config['sample_position_z'])
 
     def closeEvent(self, QCloseEvent):
         self.epics_update_timer.stop()
@@ -133,14 +154,13 @@ class EpicsController:
         msg_box.exec_()
         return msg_box.result()
 
-    @staticmethod
-    def check_conditions():
-        if int(epics.caget('13IDD:m103.RBV')) > -175:
-            return False
-        elif int(epics.caget('13IDD:m102.RBV')) > -175:
-            return False
-        elif int(epics.caget('13IDD:m67.RBV')) > -130:
-            return False
+    def check_conditions(self):
+        if epics is None:
+            return True
+        for cond in self.condition_pvs:
+            val = epics.caget(cond['pv'] + '.RBV')
+            if val is not None and int(val) > cond['limit']:
+                return False
         return True
 
     def check_sample_point_distances(self, pos_x, pos_y, pos_z):
