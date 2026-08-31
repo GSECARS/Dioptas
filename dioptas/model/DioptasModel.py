@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import tempfile
 import numpy as np
 import h5py
 
@@ -153,17 +155,18 @@ class DioptasModel:
 
         source_calibration = self.current_configuration.calibration_model
         if source_calibration.is_calibrated:
-            dioptas_config_folder = os.path.join(os.path.expanduser("~"), ".Dioptas")
-            if not os.path.isdir(dioptas_config_folder):
-                os.mkdir(dioptas_config_folder)
             # the calibration is transferred through a temporary poni file;
             # save()/load() overwrite the calibration name and filename, so
             # they are restored afterwards for both configurations
             calibration_name = source_calibration.calibration_name
             calibration_filename = source_calibration.filename
-            transfer_path = os.path.join(dioptas_config_folder, "transfer.poni")
-            source_calibration.save(transfer_path)
-            self.configurations[-1].calibration_model.load(transfer_path)
+            transfer_fd, transfer_path = tempfile.mkstemp(suffix=".poni")
+            os.close(transfer_fd)
+            try:
+                source_calibration.save(transfer_path)
+                self.configurations[-1].calibration_model.load(transfer_path)
+            finally:
+                os.unlink(transfer_path)
             for calibration_model in (
                 source_calibration,
                 self.configurations[-1].calibration_model,
@@ -217,16 +220,26 @@ class DioptasModel:
         # that fails partway (or a crash mid-write) can then never destroy
         # the previous project file, and the "unable to truncate a file
         # which is already open" failure mode cannot reach the real file.
-        temp_filename = f"{filename}.tmp-{os.getpid()}"
+        # Prefer a sibling temp file for an atomic os.replace(); fall back to
+        # the system temp dir when the target directory is read-only.
+        target_dir = os.path.dirname(os.path.abspath(filename))
         try:
-            f = h5py.File(temp_filename, "w")
-            try:
+            temp_fd, temp_filename = tempfile.mkstemp(dir=target_dir)
+        except OSError:
+            temp_fd, temp_filename = tempfile.mkstemp()
+        try:
+            os.close(temp_fd)
+            with h5py.File(temp_filename, "w") as f:
                 self._save_into(f)
-            finally:
-                f.close()
-            os.replace(temp_filename, filename)
+            try:
+                os.replace(temp_filename, filename)
+            except OSError:
+                # Cross-device link (temp and target on different filesystems):
+                # copy then delete — not atomic, but unavoidable.
+                shutil.move(temp_filename, filename)
+            temp_filename = None
         finally:
-            if os.path.isfile(temp_filename):
+            if temp_filename is not None and os.path.isfile(temp_filename):
                 os.remove(temp_filename)
 
     def _save_into(self, f: h5py.File) -> None:

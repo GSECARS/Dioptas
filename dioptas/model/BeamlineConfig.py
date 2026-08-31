@@ -4,9 +4,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ..paths import user_data_dir
+
 
 class BeamlineConfig:
-    CONFIG_PATH = Path.home() / '.Dioptas' / 'gsecars_config.json'
+    CONFIG_PATH = Path(user_data_dir()) / 'gsecars_config.json'
 
     PRESETS = {
         '13IDD': {

@@ -96,9 +96,8 @@ def _win_local_icon():
     import shutil
 
     src = os.path.join(icons_path, "icon.ico")
-    dest_dir = os.path.join(
-        os.environ.get("APPDATA", os.path.expanduser("~")), "Dioptas"
-    )
+    from .paths import user_data_dir
+    dest_dir = user_data_dir()
     try:
         os.makedirs(dest_dir, exist_ok=True)
         dest = os.path.join(dest_dir, "icon.ico")

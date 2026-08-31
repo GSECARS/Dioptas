@@ -10,11 +10,12 @@ import sys
 from pathlib import Path
 
 from .MaskPlugin import MaskPluginBase
+from ...paths import user_data_dir
 
 logger = logging.getLogger(__name__)
 
 MASK_PLUGIN_ENTRY_POINT_GROUP = "dioptas.plugins.masks"
-USER_PLUGIN_DIR = Path.home() / ".dioptas" / "plugins" / "masks"
+USER_PLUGIN_DIR = Path(user_data_dir()) / "plugins" / "masks"
 
 
 def discover_mask_plugins() -> list[type[MaskPluginBase]]:

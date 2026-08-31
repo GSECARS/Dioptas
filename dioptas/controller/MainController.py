@@ -15,6 +15,7 @@ from qtpy import QtWidgets, QtCore, QtGui
 from ..widgets.MainWidget import MainWidget
 from ..model.DioptasModel import DioptasModel, UnsupportedProjectFileError
 from ..widgets.UtilityWidgets import save_file_dialog, open_file_dialog
+from ..paths import user_data_dir
 
 from . import CalibrationController
 from .integration import IntegrationController
@@ -47,7 +48,7 @@ class MainController:
 
         # create data
         if settings_directory == "default":
-            self.settings_directory = os.path.join(os.path.expanduser("~"), ".Dioptas")
+            self.settings_directory = user_data_dir()
         else:
             self.settings_directory = settings_directory
 
@@ -401,8 +402,7 @@ class MainController:
         self.widget.integration_widget.img_frame.setWindowTitle(str)
 
     def save_default_settings(self):
-        if not os.path.exists(self.settings_directory):
-            os.mkdir(self.settings_directory)
+        os.makedirs(self.settings_directory, exist_ok=True)
         self.model.save(os.path.join(self.settings_directory, "config.dio"))
 
     def load_default_settings(self):
