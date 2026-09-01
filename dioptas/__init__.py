@@ -166,6 +166,7 @@ def main():
                 icon=icon,
                 terminal=False,
                 public=public,
+                folder="GSEApps" if public else None,
             )
 
         elif sys.argv[1].startswith("version"):
