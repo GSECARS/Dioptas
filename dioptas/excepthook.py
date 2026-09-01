@@ -25,9 +25,10 @@ def excepthook(exc_type, exc_value, traceback_obj):
     separator = '-' * 80
     notice = (
         "An unhandled exception occurred. Please report the bug under:\n"
-        "\thttps://github.com/Dioptas/Dioptas/issues\n"
+        "\thttps://github.com/GSECARS/Dioptas/issues\n"
         "or via email to:\n"
-        "\t<clemens.prescher@gmail.com>.\n\n"
+        "\t<skordasc@uchicago.edu>.\n\n"
+        "\t<stellachariton@uchicago.edu>.\n\n"
         "Please include the information below when reporting.\n\n"
     )
 
