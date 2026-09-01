@@ -158,12 +158,14 @@ def main():
                 icon = _win_local_icon()
             else:
                 icon = os.path.join(icons_path, "icon")
+            public = "-p" in sys.argv[2:] or "--public" in sys.argv[2:]
             make_shortcut(
                 "-m dioptas",
                 name="Dioptas",
                 description="Dioptas 2D XRD {}".format(__version__),
                 icon=icon,
                 terminal=False,
+                userfolders=not public,
             )
 
         elif sys.argv[1].startswith("version"):
