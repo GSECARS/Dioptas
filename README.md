@@ -1,124 +1,70 @@
-# Dioptas
+Dioptas
+===
 
-A GUI program for fast analysis of powder X-ray diffraction images. It provides the capability of calibrating,
-creating masks, having pattern overlays and showing phase lines.
+**https://dioptas.readthedocs.io/**
 
-## Documentation
+A GUI program for fast analysis of powder X-ray diffraction images. It provides the capability of calibrating, creating masks, having pattern overlays and showing phase lines.
 
-The full user manual is hosted on Read the Docs:
+Installation
+===
 
-https://dioptas.readthedocs.io/
+First, get the source: either clone with [Git](https://git-scm.com/downloads) or [download the ZIP](https://github.com/GSECARS/Dioptas/archive/refs/heads/gsecars.zip) and extract it. Then follow one of the options below.
 
-## Maintainer
+---
 
-Clemens Prescher (clemens.prescher@gmail.com)
+### Option 1 — uv (recommended)
 
-## Requirements
+**Requires:** [uv](https://docs.astral.sh/uv/getting-started/installation/)
 
-- Python 3.11, 3.12, or 3.13
+uv automatically manages the Python version and virtual environment. No separate Python install needed.
 
-Dioptas runs on 64-bit Windows, macOS, and Linux.
-
-## Installation
-
-### Executables
-
-Executable versions for Windows, macOS, and Linux can be downloaded from:
-
-https://github.com/Dioptas/Dioptas/releases
-
-The executable versions are self-contained and do not need a Python installation.
-Under Windows and Linux the program can be started by running the executable (e.g. Dioptas.exe or Dioptas).
-On macOS, open the `.dmg` and drag Dioptas to Applications. A `.tar.gz` archive of the application is also available.
-
-If macOS shows a warning that the app "cannot be verified", you need to remove the quarantine attribute by running the following command in the Terminal:
-
+**Create the desktop shortcut**
 ```bash
-find Dioptas_*.app -exec xattr -c {} \;
+cd Dioptas && uv run dioptas makeshortcut
 ```
 
-### Python Package
+This creates a desktop icon. Double-click it to launch Dioptas from then on.
 
-The easiest way to install the dioptas python package is using pip.
+---
 
+### Option 2 — conda
+
+**Requires:** [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or [Anaconda](https://www.anaconda.com/download)
+
+All commands below must be run in a **conda-enabled terminal**: on Windows use the *Anaconda Prompt* (found in the Start menu); on macOS/Linux use your regular terminal after conda has been initialized.
+
+**1. Enter the directory**
 ```bash
-pip install dioptas
-```
-
-and then run Dioptas by typing:
-
-```bash
-dioptas
-```
-
-on the command line.
-
-Dioptas is also available from conda-forge:
-
-```bash
-conda config --add channels conda-forge
-conda install dioptas
-```
-
-## Running the Program from source
-
-In order to run the program from source, the easiest way is to use the uv package manager.
-Clone the repository from github and navigate to the repository:
-
-```bash
-git clone https://github.com/Dioptas/Dioptas.git
 cd Dioptas
 ```
 
-Note: This will clone the `develop` branch by default, which contains the latest development version.
-If you want to use the latest stable release instead, switch to the `main` branch after cloning:
-
+**2. Create the environment**
 ```bash
-git checkout main
+conda create -n dioptasENV python=3.13
 ```
 
-Install uv and the dependencies by running:
-
+**3. Activate the environment**
 ```bash
-python -m pip install uv
-uv sync
+conda activate dioptasENV
 ```
 
-This will create a new environment with all the required python packages in `.venv`.
-
-Afterward the program can be started by running:
-
+**4. Install the package**
 ```bash
-uv run dioptas
+pip install .
 ```
 
-In order to run the program without uv, you need to install the required packages yourself.
-The packages are listed in the file `pyproject.toml`. The program can then be started by running:
-
+**5. Create the desktop shortcut**
 ```bash
-python run.py
+dioptas --make-icon
 ```
 
-## Scripting API
+This creates a desktop icon. Double-click it to launch Dioptas from then on.
 
-Dioptas can also be used as a Python library for headless integration from scripts and Jupyter notebooks.
-Set up your experiment in the GUI, save a `.dio` project file, then use it in code:
+---
 
-```python
-from dioptas.pipeline import Pipeline
+Maintainers
+===
 
-# Load full setup (calibration, mask, corrections, etc.) from a project file
-p = Pipeline.from_project("experiment.dio")
-
-# Override the mask if needed
-p.load_mask("new_beamstop.mask")
-
-# Integrate a single image
-pattern = p.integrate("sample_001.tiff")
-pattern.save("sample_001.xy")
-
-# Batch integrate with a glob pattern
-patterns = p.integrate_batch("data/sample_*.tif")
-```
-
-See the [scripting API documentation](docs/source/scripting_api.rst) for the full reference.
+Christofanis Skordas (skordasc@uchicago.edu)  
+Stella Chariton (stellachariton@uchicago.edu)
+GSECARS, Center for Advanced Radiation Sources, University of Chicago

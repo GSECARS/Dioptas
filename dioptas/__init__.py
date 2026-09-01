@@ -147,7 +147,7 @@ def main():
             controller = MainController(use_settings=False)
             controller.show_window()
 
-        elif sys.argv[1].startswith("makeshortcut"):
+        elif sys.argv[1].startswith("makeshortcut") or sys.argv[1] in ("--make-icon", "-m"):
             if make_shortcut is None:
                 raise ImportError("pyshortcuts not installed.  Try `pip install pyshortcuts`")
             if _platform == "win32":
