@@ -165,7 +165,7 @@ def main():
                 description="Dioptas 2D XRD {}".format(__version__),
                 icon=icon,
                 terminal=False,
-                userfolders=not public,
+                public=public,
             )
 
         elif sys.argv[1].startswith("version"):
