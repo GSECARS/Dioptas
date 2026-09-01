@@ -27,28 +27,16 @@ except ImportError:
     make_shortcut = None
 
 try:
-    from ._version import version as __version__
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("dioptas")
 except Exception:
     try:
-        from importlib.metadata import version as _pkg_version
-        __version__ = _pkg_version("dioptas")
+        import tomllib
+        _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(_root, "pyproject.toml"), "rb") as _f:
+            __version__ = tomllib.load(_f)["project"]["version"]
     except Exception:
         __version__ = "0.0.0"
-        try:
-            _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            _pj = os.path.join(_root, "pyproject.toml")
-            if os.path.isfile(_pj):
-                try:
-                    with open(_pj, "rb") as _f:
-                        __version__ = __import__("tomllib").load(_f).get("tool", {}).get("setuptools_scm", {}).get("fallback_version") or "0.0.0"
-                except Exception:
-                    import re
-                    with open(_pj, "r", encoding="utf-8") as _f:
-                        _m = re.search(r'fallback_version\s*=\s*["\']([^"\']+)["\']', _f.read())
-                    if _m:
-                        __version__ = _m.group(1)
-        except Exception:
-            pass
 
 from .paths import resources_path, calibrants_path, icons_path, data_path, style_path
 from .excepthook import excepthook

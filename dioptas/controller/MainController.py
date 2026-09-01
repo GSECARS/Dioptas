@@ -381,7 +381,7 @@ class MainController:
         pattern_filename = os.path.basename(self.model.pattern.filename)
         calibration_name = self.model.calibration_model.calibration_name
         year = datetime.datetime.now().year
-        dioptas_str = "Dioptas " + __version__ + " - © {} C. Prescher".format(year)
+        dioptas_str = "Dioptas" + __version__ + " - GSECARS"
 
         if img_filename == "" and pattern_filename == "":
             self.widget.setWindowTitle(dioptas_str)

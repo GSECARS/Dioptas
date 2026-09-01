@@ -1,6 +1,6 @@
 [project]
 name = "dioptas"
-dynamic = ["version"]
+version = "0.10.0"
 description = "GUI program for reduction and exploration of 2D X-ray diffraction data"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -65,26 +65,12 @@ test = [
 [project.scripts]
 dioptas = "dioptas:main"
 
-[tool.setuptools]
-include-package-data = true
-
-[tool.setuptools.package-data]
-dioptas = ["resources/**"]
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["dioptas*"]
-exclude = ["dioptas.tests*"]
-
 [build-system]
-requires = ["setuptools>=68", "setuptools_scm[toml]>=8", "wheel", "numpy>=1.22"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.setuptools_scm]
-version_file = "dioptas/_version.py"
-fallback_version = "0.10.0"
-tag_regex = "^(?P<version>\\d+\\.\\d+\\.\\d+)$"
-git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--exclude", "*_*"]
+[tool.hatch.build.targets.wheel]
+packages = ["dioptas"]
 
 [tool.cibuildwheel]
 # Project requires Python >=3.11,<3.14
