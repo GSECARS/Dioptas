@@ -147,7 +147,7 @@ def main():
             controller = MainController(use_settings=False)
             controller.show_window()
 
-        elif sys.argv[1].startswith("makeshortcut") or sys.argv[1] in ("--make-icon", "-m"):
+        elif sys.argv[1].startswith("makeshortcut") or sys.argv[1] in ("--make-icon", "-m", "-p", "--public"):
             if make_shortcut is None:
                 raise ImportError("pyshortcuts not installed.  Try `pip install pyshortcuts`")
             if _platform == "win32":
@@ -158,7 +158,7 @@ def main():
                 icon = _win_local_icon()
             else:
                 icon = os.path.join(icons_path, "icon")
-            public = "-p" in sys.argv[2:] or "--public" in sys.argv[2:]
+            public = sys.argv[1] in ("-p", "--public") or "-p" in sys.argv[2:] or "--public" in sys.argv[2:]
             make_shortcut(
                 "-m dioptas",
                 name="Dioptas",
