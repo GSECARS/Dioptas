@@ -1118,8 +1118,11 @@ class ImgModel:
                         if not dataset_name.startswith("NDArray"):
                             result.append(f"{dataset_name}: {value}")
 
-        with h5py.File(filename, "r") as h5_file:
-            h5_file.visititems(find_attrs)
+        try:
+            with h5py.File(filename, "r") as h5_file:
+                h5_file.visititems(find_attrs)
+        except OSError:
+            return ""
 
         return "\n".join(result)
     
@@ -1147,8 +1150,11 @@ class ImgModel:
                         except ValueError:
                             result[dataset_name] = value
 
-        with h5py.File(filename, "r") as h5_file:
-            h5_file.visititems(find_attrs)
+        try:
+            with h5py.File(filename, "r") as h5_file:
+                h5_file.visititems(find_attrs)
+        except OSError:
+            return {}
 
         return result
 
