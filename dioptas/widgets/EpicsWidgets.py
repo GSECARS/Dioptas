@@ -26,6 +26,12 @@ class MoveStageWidget(QtWidgets.QWidget):
         self.ver_lbl = QtWidgets.QLabel(self)
         self.focus_lbl = QtWidgets.QLabel(self)
 
+        # Precision spinbox
+        self.precision_sb = QtWidgets.QSpinBox(self)
+        self.precision_sb.setRange(0, 6)
+        self.precision_sb.setValue(4)
+        self.precision_sb.setFixedWidth(50)
+
         # Create checkboxes
         self.move_hor_cb = QtWidgets.QCheckBox(self)
         self.move_ver_cb = QtWidgets.QCheckBox(self)
@@ -53,6 +59,9 @@ class MoveStageWidget(QtWidgets.QWidget):
         grid_layout.addWidget(self.focus_lbl, 3, 1)
         grid_layout.addWidget(self.img_focus_lbl, 3, 2)
         grid_layout.addWidget(self.move_focus_cb, 3, 3)
+
+        grid_layout.addWidget(LabelAlignRight("Decimals:"), 4, 0)
+        grid_layout.addWidget(self.precision_sb, 4, 1)
 
         btn_layout = QtWidgets.QHBoxLayout()
         btn_layout.addWidget(self.move_btn)

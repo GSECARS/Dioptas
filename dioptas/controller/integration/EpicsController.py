@@ -54,13 +54,14 @@ class EpicsController:
 
         self.widget.move_widget_btn.clicked.connect(self.widget.move_widget.raise_widget)
         self.widget.move_widget.move_btn.clicked.connect(self.move_stage)
+        self.widget.move_widget.precision_sb.valueChanged.connect(self.update_image_position)
 
     def update_current_motor_position(self):
         if epics is None:
             return
-        hor = epics.caget(self.hor_motor_name + '.RBV', as_string=True)
-        ver = epics.caget(self.ver_motor_name + '.RBV', as_string=True)
-        focus = epics.caget(self.focus_motor_name + '.RBV', as_string=True)
+        hor = epics.caget(self.hor_motor_name + '.RBV')
+        ver = epics.caget(self.ver_motor_name + '.RBV')
+        focus = epics.caget(self.focus_motor_name + '.RBV')
 
         connected = hor is not None and ver is not None and focus is not None
         if connected:
@@ -74,15 +75,17 @@ class EpicsController:
             if self.on_connection_changed is not None:
                 self.on_connection_changed(connected)
 
-        self.move_widget.hor_lbl.setText(str(hor))
-        self.move_widget.ver_lbl.setText(str(ver))
-        self.move_widget.focus_lbl.setText(str(focus))
+        fmt = f'{{:.{self.move_widget.precision_sb.value()}f}}'
+        self.move_widget.hor_lbl.setText(fmt.format(hor) if hor is not None else '')
+        self.move_widget.ver_lbl.setText(fmt.format(ver) if ver is not None else '')
+        self.move_widget.focus_lbl.setText(fmt.format(focus) if focus is not None else '')
 
     def update_image_position(self):
         try:
-            self.move_widget.img_hor_lbl.setText('{:.3f}'.format(self.model.img_model.motors_info['Horizontal']))
-            self.move_widget.img_ver_lbl.setText('{:.3f}'.format(self.model.img_model.motors_info['Vertical']))
-            self.move_widget.img_focus_lbl.setText('{:.3f}'.format(self.model.img_model.motors_info['Focus']))
+            fmt = f'{{:.{self.move_widget.precision_sb.value()}f}}'
+            self.move_widget.img_hor_lbl.setText(fmt.format(self.model.img_model.motors_info['Horizontal']))
+            self.move_widget.img_ver_lbl.setText(fmt.format(self.model.img_model.motors_info['Vertical']))
+            self.move_widget.img_focus_lbl.setText(fmt.format(self.model.img_model.motors_info['Focus']))
         except KeyError:
             self.move_widget.img_hor_lbl.setText("")
             self.move_widget.img_ver_lbl.setText("")
