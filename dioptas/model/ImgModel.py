@@ -442,13 +442,15 @@ class ImgModel:
         """Loads an image using the fabio library."""
         try:
             self.loader = FabioLoader(filename)
+            h5_file_info = self._get_h5_file_info(filename, frame_index)
+            h5_motors_info = self._get_h5_motors_info(filename, frame_index)
             return {
                 "img_data_fabio": self.loader.fabio_image,
                 "img_data": self.loader.get_image(frame_index),
                 "series_max": self.loader.series_max,
                 "series_get_image": self.loader.get_image,
-                "file_info": self._get_h5_file_info(filename, frame_index),
-                "motors_info": self._get_h5_motors_info(filename, frame_index)
+                "file_info": h5_file_info if h5_file_info else self._get_fabio_file_info(self.loader.fabio_image),
+                "motors_info": h5_motors_info if h5_motors_info else self._get_fabio_motors_info(self.loader.fabio_image),
             }
         except (IOError, fabio.fabioutils.NotGoodReader):
             return None
@@ -1156,6 +1158,49 @@ class ImgModel:
         except OSError:
             return {}
 
+        return result
+
+    def _get_fabio_file_info(self, fabio_image) -> str:
+        """Reads file info from a fabio image header (e.g. CBF _array_data.header_contents)."""
+        try:
+            header = getattr(fabio_image, 'header', None) or {}
+            header_text = header.get('_array_data.header_contents', '')
+            if not isinstance(header_text, str) or not header_text.strip():
+                return ''
+            lines = []
+            for line in header_text.splitlines():
+                line = line.strip()
+                if line.startswith('# ') and len(line) > 2:
+                    content = line[2:]
+                    parts = content.split(' ', 1)
+                    if len(parts) == 2:
+                        lines.append(f"{parts[0]}: {parts[1]}")
+                    elif parts:
+                        lines.append(parts[0])
+            return '\n'.join(lines)
+        except Exception:
+            return ''
+
+    def _get_fabio_motors_info(self, fabio_image) -> dict[str, float]:
+        """Reads motor positions from a fabio image header."""
+        result = {}
+        try:
+            header = getattr(fabio_image, 'header', None) or {}
+            header_text = header.get('_array_data.header_contents', '')
+            if not isinstance(header_text, str):
+                return result
+            for line in header_text.splitlines():
+                line = line.strip()
+                if line.startswith('# ') and len(line) > 2:
+                    content = line[2:]
+                    parts = content.split(' ', 1)
+                    if len(parts) == 2:
+                        try:
+                            result[parts[0]] = float(parts[1])
+                        except ValueError:
+                            result[parts[0]] = parts[1]
+        except Exception:
+            pass
         return result
 
     @property
