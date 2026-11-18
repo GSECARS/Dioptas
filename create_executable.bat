@@ -1,7 +1,14 @@
-rmdir /s /q dist
-rmdir /s /q build
+rmdir /s /q dist 2>NUL
+rmdir /s /q build 2>NUL
 
-pyinstaller Dioptas.spec
+uv sync
+uv pip install pyinstaller
+
+for /f "delims=" %%i in ('uv run python -c "import fabio, os; print(os.path.dirname(fabio.__file__))"') do set FABIO_PATH=%%i
+copy fabio\eigerimage.py "%FABIO_PATH%\eigerimage.py"
+copy fabio\app\eiger2crysalis.py "%FABIO_PATH%\app\eiger2crysalis.py"
+
+uv run --no-sync pyinstaller Dioptas.spec -y
 
 cd dist/Dioptas*
 
