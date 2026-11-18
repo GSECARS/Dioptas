@@ -1,3 +1,4 @@
+@echo off
 rmdir /s /q dist 2>NUL
 rmdir /s /q build 2>NUL
 
@@ -9,6 +10,9 @@ copy fabio\eigerimage.py "%FABIO_PATH%\eigerimage.py"
 copy fabio\app\eiger2crysalis.py "%FABIO_PATH%\app\eiger2crysalis.py"
 
 uv run --no-sync pyinstaller Dioptas.spec -y
+
+for /f "delims=" %%v in ('uv run python -c "from dioptas import __version__; print(__version__)"') do set VERSION=%%v
+makensis /DVERSION=%VERSION% Dioptas_installer.nsi
 
 cd dist/Dioptas*
 
