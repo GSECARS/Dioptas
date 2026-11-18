@@ -2,8 +2,12 @@
 rmdir /s /q dist 2>NUL
 rmdir /s /q build 2>NUL
 
+set UV_PROJECT_ENVIRONMENT=.venv
+set PATH=%PATH%;C:\Program Files (x86)\NSIS
+rmdir /s /q .venv 2>NUL
+uv venv
 uv sync
-uv pip install pyinstaller
+uv pip install --python .venv pyinstaller
 
 for /f "delims=" %%i in ('uv run python -c "import fabio, os; print(os.path.dirname(fabio.__file__))"') do set FABIO_PATH=%%i
 copy fabio\eigerimage.py "%FABIO_PATH%\eigerimage.py"
@@ -12,7 +16,12 @@ copy fabio\app\eiger2crysalis.py "%FABIO_PATH%\app\eiger2crysalis.py"
 uv run --no-sync pyinstaller Dioptas.spec -y
 
 for /f "delims=" %%v in ('uv run python -c "from dioptas import __version__; print(__version__)"') do set VERSION=%%v
-makensis /DVERSION=%VERSION% Dioptas_installer.nsi
+where makensis >NUL 2>&1
+if %ERRORLEVEL% == 0 (
+    makensis /DVERSION=%VERSION% Dioptas_installer.nsi
+) else (
+    echo NSIS not found, skipping installer creation. Install NSIS from https://nsis.sourceforge.io/
+)
 
 cd dist/Dioptas*
 
